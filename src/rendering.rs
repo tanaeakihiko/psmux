@@ -123,15 +123,61 @@ pub fn has_conpty_passthrough() -> bool {
     })
 }
 
-/// Resolve the DECSCUSR code (0-6) from the PSMUX_CURSOR_STYLE / PSMUX_CURSOR_BLINK
-/// configuration.  Returns 0 ("default") when no explicit style is configured.
+/// Whether `cursor-blink` is on, or `None` when nobody set it.
+///
+/// `set -g cursor-blink <value>` takes the words the option is documented
+/// with and stores `1` or `0` in `PSMUX_CURSOR_BLINK` (config.rs,
+/// server/options.rs). The variable is read back the way that value was
+/// parsed, so a shell that exports the word rather than the digit,
+/// `PSMUX_CURSOR_BLINK=off`, does not come out meaning the opposite of what it
+/// says. Everything that is not a yes is a no, which is what the option's own
+/// parser does.
+pub(crate) fn cursor_blink_option() -> Option<bool> {
+    env::var("PSMUX_CURSOR_BLINK")
+        .ok()
+        .map(|value| matches!(value.as_str(), "1" | "on" | "true"))
+}
+
+/// Whether an unset `cursor-blink` blinks, mirroring its catalog default.
+///
+/// It is `off`, which is what makes a bare `block`, `underline` or `bar` mean
+/// the steady shape tmux means by those words. Named rather than inlined so
+/// the fallback below reads as two separate reasons, and so a test can hold it
+/// against the catalog.
+pub(crate) const CURSOR_BLINK_DEFAULT_BLINKS: bool = false;
+
+/// Resolve the DECSCUSR code (1-6) from the PSMUX_CURSOR_STYLE /
+/// PSMUX_CURSOR_BLINK configuration, or 0 for "no opinion".
+///
+/// 0 is a state, not a shape: it is what `cursor-style default` means, it is
+/// the default of the option, and it is also what an unset or unrecognised
+/// value resolves to. tmux spells the same state `SCREEN_CURSOR_DEFAULT`
+/// (tmux.h) and treats it as a third value beside block, underline and bar.
 ///
 /// Used as the fallback cursor shape when ConPTY doesn't forward DECSCUSR from
 /// the child process (Windows 10 without passthrough mode).
 pub fn configured_cursor_code() -> u8 {
-    let style = env::var("PSMUX_CURSOR_STYLE").unwrap_or_else(|_| "bar".to_string());
-    let blink = env::var("PSMUX_CURSOR_BLINK").unwrap_or_else(|_| "1".to_string()) != "0";
-    match style.as_str() {
+    let style = env::var("PSMUX_CURSOR_STYLE").unwrap_or_else(|_| "default".to_string());
+    // tmux has no `cursor-blink`: it spells the blink into the value, as
+    // `blinking-block`, `blinking-underline` and `blinking-bar`
+    // (options-table.c, tmux.1). psmux has carried the blink as its own
+    // option since its first commit and users have it in their configs, so
+    // both spellings have to work. The prefix names the SHAPE; who decides the
+    // blink depends on whether the option was set at all.
+    let named_blink = style.strip_prefix("blinking-");
+    let shape = named_blink.unwrap_or(style.as_str());
+    let blink = match cursor_blink_option() {
+        // Set: it decides. It is the setting that speaks about nothing but
+        // blinking, so `cursor-style blinking-bar` with `cursor-blink off` is
+        // a steady bar.
+        Some(on) => on,
+        // Not set: a value that names the blink supplies it, and otherwise
+        // `cursor-blink`'s own default stands. With that default off, a bare
+        // `block` is the steady block tmux means by the word, and
+        // `blinking-block` is the blinking one.
+        None => named_blink.is_some() || CURSOR_BLINK_DEFAULT_BLINKS,
+    };
+    match shape {
         "block" => if blink { 1 } else { 2 },
         "underline" => if blink { 3 } else { 4 },
         "bar" | "beam" => if blink { 5 } else { 6 },
@@ -140,8 +186,18 @@ pub fn configured_cursor_code() -> u8 {
     }
 }
 
+/// Assert the configured cursor shape on the real terminal, once, at attach.
+///
+/// Writes nothing when nothing asked for a shape. tmux never sends one of its
+/// own either: `tty_start_tty` (tty.c) sends the alternate screen, the keypad
+/// mode, a clear, `cnorm`, the mouse mode resets and bracketed paste, and no
+/// DECSCUSR at all. A terminal keeps the cursor its user configured because
+/// nothing overwrote it, which cannot be had by sending a reset instead.
 pub fn apply_cursor_style<W: Write>(out: &mut W) -> io::Result<()> {
     let code = configured_cursor_code();
+    if code == 0 {
+        return Ok(());
+    }
     execute!(out, Print(format!("\x1b[{} q", code)))?;
     Ok(())
 }
@@ -274,3 +330,7 @@ pub fn centered_rect(percent_x: u16, height: u16, r: Rect) -> Rect {
     let final_h = middle.height.min(clamped_h);
     Rect { x, y: middle.y, width, height: final_h }
 }
+
+#[cfg(test)]
+#[path = "../tests-rs/test_issue735_cursor_style_default.rs"]
+mod test_issue735_cursor_style_default;

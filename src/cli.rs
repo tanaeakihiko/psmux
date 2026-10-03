@@ -786,8 +786,16 @@ SET OPTIONS (use with: set -g <option> <value>):
     default-command     Str  Alias for default-shell
     word-separators     Str  Copy-mode word delimiters (default: " -_@")
     prediction-dimming  Bool Dim predictive text (default: on)
-    cursor-style        Str  Cursor shape: block, underline, bar
-    cursor-blink        Bool Cursor blinking (default: off)
+    cursor-style        Str  Cursor shape: default, block, underline, bar,
+                             and tmux's blinking-block, blinking-underline
+                             and blinking-bar (default: default, which
+                             leaves the terminal the cursor its user
+                             configured)
+    cursor-blink        Bool Cursor blinking, for the shapes, not for
+                             "default". A blinking-* shape blinks on its
+                             own; setting this decides either way
+                             (default: off, so a bare block, underline or
+                             bar is steady, as in tmux)
     bell-action         Str  Bell handling: any, none, current, other
     visual-bell         Bool Visual bell indicator (default: off)
 
@@ -892,8 +900,10 @@ COPY MODE KEYS (prefix + [):
 ENVIRONMENT VARIABLES:
     PSMUX_SESSION_NAME       Default session name
     PSMUX_DEFAULT_SESSION    Fallback default session name
-    PSMUX_CURSOR_STYLE       Cursor style (block, underline, bar)
-    PSMUX_CURSOR_BLINK       Cursor blinking (1/0)
+    PSMUX_CURSOR_STYLE       Cursor style (default, block, underline, bar,
+                             blinking-block, blinking-underline, blinking-bar)
+    PSMUX_CURSOR_BLINK       Cursor blinking (1/on/true, else off; unset
+                             is not the same as 0)
     PSMUX_DIM_PREDICTIONS    Prediction dimming (1 to enable)
     TMUX                     Set inside psmux panes (tmux-compatible)
     TMUX_PANE                Current pane ID (e.g. %1)

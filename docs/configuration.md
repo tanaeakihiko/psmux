@@ -40,7 +40,10 @@ set -g status-left "[#S] "
 set -g status-right "%H:%M %d-%b-%y"
 set -g status-style "bg=green,fg=black"
 
-# Cursor style: block, underline, or bar
+# Cursor style: default, block, underline, or bar, and tmux's blinking-block,
+# blinking-underline and blinking-bar. The default, `default`, sends no cursor
+# shape at all, so the terminal keeps the one its user chose. A bare shape is
+# steady; `set -g cursor-blink on` makes it blink, as does a blinking-* shape.
 set -g cursor-style bar
 set -g cursor-blink on
 
@@ -664,8 +667,8 @@ bind-key C-Space send-prefix
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `prediction-dimming` | Bool | `off` | Dim predictive/speculative text |
-| `cursor-style` | Str | `bar` | Cursor shape: `block`, `underline`, or `bar` |
-| `cursor-blink` | Bool | `on` | Cursor blinking |
+| `cursor-style` | Str | `default` | Cursor shape: `default`, `block`, `underline`, `bar`, and tmux's `blinking-block`, `blinking-underline`, `blinking-bar`. `default` sends no shape, so the terminal keeps the cursor its user configured |
+| `cursor-blink` | Bool | `off` | Cursor blinking, for the shapes, not for `default`. A `blinking-*` shape blinks on its own; setting this decides either way. Off by default, so a bare `block`, `underline` or `bar` is the steady shape tmux means by the word |
 | `env-shim` | Bool | `on` | Inject Unix-compatible `env` function in PowerShell panes |
 | `claude-code-fix-tty` | Bool | `on` | Patch Node.js process.stdout.isTTY for Claude Code |
 | `claude-code-force-interactive` | Bool | `on` | Set CLAUDE_CODE_FORCE_INTERACTIVE=1 in panes |
@@ -874,7 +877,7 @@ hatch you want for one invocation rather than forever.
 | Variable | Effect |
 |---|---|
 | `PSMUX_CURSOR_STYLE` | Cursor shape: `bar`, `block`, `underline`, or `default`. Normally set for you by `set -g cursor-style` |
-| `PSMUX_CURSOR_BLINK` | Cursor blink. `0` disables it. Normally set for you by `set -g cursor-blink` |
+| `PSMUX_CURSOR_BLINK` | Cursor blink. `1`, `on` or `true` enables it, anything else disables it, and leaving it unset is not the same as `0`: see `cursor-blink` above. Normally set for you by `set -g cursor-blink` |
 | `PSMUX_DIM_PREDICTIONS` | Dim PSReadLine prediction text for this shell only. The option form is `prediction-dimming` |
 | `PSMUX_HOST_COLORS` | Supplies the host terminal's palette so psmux can answer OSC 4, 10 and 11 colour queries. psmux normally queries the host itself; set this when the host misreports or when the query cannot run |
 | `PSMUX_XTVERSION_NAME` | The terminal name psmux reports when a pane asks XTVERSION (`ESC [ > q`). Defaults to `tmux`, matching the identity a pane already sees in `$TMUX` and in the first line of `psmux -V`. Set it to `psmux` to be announced under psmux's own name |

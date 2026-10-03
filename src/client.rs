@@ -3450,7 +3450,15 @@ pub fn run_remote(terminal: &mut Terminal<crate::platform::PsmuxBackend>, input:
     // ── Cursor blink stabilisation ──────────────────────────────────
     // Cache the last-sent DECSCUSR code so we only write it when it
     // actually changes (avoids resetting WT's blink timer every frame).
-    let mut last_cursor_style: u8 = 255;
+    //
+    // It starts at 0, the code for "no shape asserted", because that is the
+    // state the terminal is in before this client writes anything: whatever
+    // cursor its user configured. A frame that also wants 0 therefore writes
+    // nothing, and the reset goes out only to undo a shape this client itself
+    // sent. tmux keeps the same latch and the same rule in
+    // `tty_update_cursor` (tty.c): for `SCREEN_CURSOR_DEFAULT` it sends `Se`,
+    // or `Ss 0`, only `if (tty->cstyle != SCREEN_CURSOR_DEFAULT)`.
+    let mut last_cursor_style: u8 = 0;
     // Trap Ctrl+Break (and stray Ctrl+C) console signals so they interrupt the
     // pane's foreground program instead of terminating this client and
     // detaching the still-running session (issue #454).  The signal is drained
