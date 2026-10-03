@@ -786,16 +786,18 @@ SET OPTIONS (use with: set -g <option> <value>):
     default-command     Str  Alias for default-shell
     word-separators     Str  Copy-mode word delimiters (default: " -_@")
     prediction-dimming  Bool Dim predictive text (default: on)
-    cursor-style        Str  Cursor shape: default, block, underline, bar,
-                             and tmux's blinking-block, blinking-underline
-                             and blinking-bar (default: default, which
-                             leaves the terminal the cursor its user
-                             configured)
-    cursor-blink        Bool Cursor blinking, for the shapes, not for
-                             "default". A blinking-* shape blinks on its
-                             own; setting this decides either way
-                             (default: off, so a bare block, underline or
-                             bar is steady, as in tmux)
+    cursor-style        Str  Cursor shape asked of the terminal. "block",
+                             "underline" and "bar" are steady;
+                             "blinking-block", "blinking-underline" and
+                             "blinking-bar" blink. "default" asks for no
+                             shape, so the cursor you had before starting
+                             psmux is the one you keep, and with neither
+                             option set that is what you get
+                             (default: default)
+    cursor-blink        Bool Adds or removes the blink of the shape above:
+                             "on" makes a steady shape blink, "off" stops a
+                             blinking one. Nothing to act on while
+                             cursor-style is "default" (default: off)
     bell-action         Str  Bell handling: any, none, current, other
     visual-bell         Bool Visual bell indicator (default: off)
 

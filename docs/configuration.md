@@ -40,10 +40,8 @@ set -g status-left "[#S] "
 set -g status-right "%H:%M %d-%b-%y"
 set -g status-style "bg=green,fg=black"
 
-# Cursor style: default, block, underline, or bar, and tmux's blinking-block,
-# blinking-underline and blinking-bar. The default, `default`, sends no cursor
-# shape at all, so the terminal keeps the one its user chose. A bare shape is
-# steady; `set -g cursor-blink on` makes it blink, as does a blinking-* shape.
+# Cursor shape. Leave both out, as most configs do, and psmux asks for no
+# shape, so the cursor you had before starting it is the cursor you keep.
 set -g cursor-style bar
 set -g cursor-blink on
 
@@ -364,6 +362,52 @@ set -g copy-mode-current-line-number-style "fg=yellow,bold"
 The gutter does not move what the mouse points at: a click or a drag in copy
 mode selects the cell under the pointer whichever mode is set.
 
+### Cursor
+
+**With neither option set, which is how most configurations run, psmux asks
+the terminal for no cursor shape at all, so the cursor you had before starting
+psmux is the cursor you see inside it.** A program running in a pane can still
+ask for its own shape, exactly as it would outside psmux, and psmux passes that
+through. This is what tmux does as well: its `cursor-style` defaults to
+`default`, and it sends a shape only once something has asked for one.
+
+`cursor-style` is the shape psmux asks for when you do want it to pick:
+
+```tmux
+# Steady shapes
+set -g cursor-style block
+set -g cursor-style underline
+set -g cursor-style bar
+
+# The same three, blinking. tmux spells them this way and carries no separate
+# blink option, so a configuration written for tmux works unchanged
+set -g cursor-style blinking-block
+set -g cursor-style blinking-underline
+set -g cursor-style blinking-bar
+
+# Back to asking for nothing
+set -g cursor-style default
+```
+
+`cursor-blink` adds or removes the blink of whichever shape is named, so it is
+another way to spell the same six:
+
+```tmux
+# A blinking bar, two ways
+set -g cursor-style blinking-bar
+set -g cursor-style bar
+set -g cursor-blink on
+
+# A steady bar, two ways
+set -g cursor-style bar
+set -g cursor-style blinking-bar
+set -g cursor-blink off
+```
+
+Set, `cursor-blink` decides; left alone, the shape's own name decides. It has
+nothing to act on while `cursor-style` is `default`, because no shape is sent
+for it to change.
+
 ### Popup and Window Styling
 
 `display-popup` overlays and the pane contents themselves can be styled separately from the borders around them:
@@ -667,8 +711,8 @@ bind-key C-Space send-prefix
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `prediction-dimming` | Bool | `off` | Dim predictive/speculative text |
-| `cursor-style` | Str | `default` | Cursor shape: `default`, `block`, `underline`, `bar`, and tmux's `blinking-block`, `blinking-underline`, `blinking-bar`. `default` sends no shape, so the terminal keeps the cursor its user configured |
-| `cursor-blink` | Bool | `off` | Cursor blinking, for the shapes, not for `default`. A `blinking-*` shape blinks on its own; setting this decides either way. Off by default, so a bare `block`, `underline` or `bar` is the steady shape tmux means by the word |
+| `cursor-style` | Str | `default` | The cursor shape psmux asks the terminal for. `block`, `underline` and `bar` are steady; `blinking-block`, `blinking-underline` and `blinking-bar` blink; `default` asks for no shape at all. See [Cursor](#cursor) |
+| `cursor-blink` | Bool | `off` | Adds or removes the blink of the shape above: `on` makes a steady shape blink, `off` stops a blinking one. It has nothing to act on while `cursor-style` is `default`. See [Cursor](#cursor) |
 | `env-shim` | Bool | `on` | Inject Unix-compatible `env` function in PowerShell panes |
 | `claude-code-fix-tty` | Bool | `on` | Patch Node.js process.stdout.isTTY for Claude Code |
 | `claude-code-force-interactive` | Bool | `on` | Set CLAUDE_CODE_FORCE_INTERACTIVE=1 in panes |

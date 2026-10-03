@@ -14,7 +14,7 @@
 # attach path is covered byte for byte by the unit test over
 # `apply_cursor_style` (tests-rs/test_issue735_cursor_style_default.rs).
 #
-# Before the fix: 4 passed, 3 failed. After: 7 passed, 0 failed.
+# Before the fix: 4 passed, 4 failed. After: 8 passed, 0 failed.
 
 $ErrorActionPreference = "Continue"
 $env:PSMUX_NO_WARM = "1"
@@ -93,23 +93,36 @@ Start-Sleep -Milliseconds 300
 
 # ---- the CLI help says what the catalog says ----
 # `src/cli.rs` prints its help from one `println!(r#"..."#)`, so running the
-# binary is the only way to read it.
-$help = (& $PSMUX --help 2>&1 | Out-String)
+# binary is the only way to read it. Each entry wraps over several lines, so
+# the whole entry is read, not the first line of it.
+$help = (& $PSMUX --help 2>&1 | Out-String) -split "`r?`n"
 
-$styleLine = ($help -split "`r?`n" | Where-Object { $_ -match "^\s+cursor-style\s" } | Select-Object -First 1)
-if ($styleLine -match "default") {
-    Write-Pass "psmux --help lists default among the cursor shapes"
-} else {
-    Write-Fail "psmux --help omits default from the cursor shapes: [$($styleLine.Trim())]"
+function Get-HelpEntry([string]$Name) {
+    $i = 0
+    while ($i -lt $help.Count -and $help[$i] -notmatch ("^\s+" + [regex]::Escape($Name) + "\s")) { $i++ }
+    if ($i -ge $help.Count) { return "" }
+    $entry = $help[$i]
+    $i++
+    # Continuation lines are indented past the description column and start no
+    # option of their own.
+    while ($i -lt $help.Count -and $help[$i] -match "^\s{25,}\S") { $entry += " " + $help[$i].Trim(); $i++ }
+    return $entry
 }
 
-$blinkLine = ($help -split "`r?`n" | Where-Object { $_ -match "^\s+cursor-blink\s" } | Select-Object -First 1)
-# The entry wraps over several lines, so read the whole entry, not one line.
-$blinkBlock = $help -split "`r?`n" | Select-String -Pattern "cursor-blink" -Context 0, 4 | Out-String
-if ($blinkBlock -match "default: off") {
+$styleEntry = Get-HelpEntry "cursor-style"
+foreach ($want in @("blinking-bar", "default: default")) {
+    if ($styleEntry -match [regex]::Escape($want)) {
+        Write-Pass "psmux --help for cursor-style mentions $want"
+    } else {
+        Write-Fail "psmux --help for cursor-style omits ${want}: [$styleEntry]"
+    }
+}
+
+$blinkEntry = Get-HelpEntry "cursor-blink"
+if ($blinkEntry -match "default: off") {
     Write-Pass "psmux --help states cursor-blink defaults to off"
 } else {
-    Write-Fail "psmux --help states the wrong cursor-blink default: [$($blinkLine.Trim())]"
+    Write-Fail "psmux --help states the wrong cursor-blink default: [$blinkEntry]"
 }
 
 P kill-server | Out-Null
