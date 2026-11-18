@@ -1,0 +1,92 @@
+name: Nightly Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $filename = "psmux-nightly-windows-x64.zip"
+
+          Compress-Archive `
+            -Path target/release/psmux.exe, `
+                  target/release/pmux.exe, `
+                  target/release/tmux.exe `
+            -DestinationPath $filename
+
+          "ARCHIVE=$filename" >> $env:GITHUB_ENV
+
+      - name: Publish nightly release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          $tag = "nightly"
+          $shaShort = $env:SHA.Substring(0, 7)
+
+          $notes = @"
+          Unofficial development build of psmux.
+
+          **Commit:** $env:SHA
+          **Branch:** master
+
+          Download **$env:ARCHIVE** for Windows x64.
+
+          This is a test build, not an official release.
+          It may contain bugs or regressions.
+
+          The automatically generated Source code archives
+          are not Windows executables.
+          "@
+
+          $notes | Set-Content release-notes.md
+
+          # Remove the previous nightly release and tag.
+          gh release view $tag --repo $env:REPO *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete $tag `
+              --repo $env:REPO `
+              --cleanup-tag `
+              --yes
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to delete old nightly release"
+            }
+          }
+
+          # Publish the new nightly release.
+          gh release create $tag $env:ARCHIVE `
+            --repo $env:REPO `
+            --target $env:SHA `
+            --title "Unofficial psmux Nightly ($shaShort)" `
+            --notes-file release-notes.md `
+            --prerelease `
+            --latest=false
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to publish nightly release"
+          }
+
