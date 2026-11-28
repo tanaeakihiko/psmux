@@ -470,6 +470,7 @@ pub fn open_display_popup(
             env,
             &app.env_scopes.child_removals(&app.environment),
             app.host_colors.as_ref(),
+            &crate::format::expand_format(&app.default_shell, &app),
         )
     } else {
         None
@@ -620,6 +621,68 @@ pub fn popup_frame_wire(app: &AppState, look: &PopupLook) -> (String, String, St
 
 // ── Popup pane creation ─────────────────────────────────────────────
 
+/// The process a popup (or floating pane) runs. `default_shell` is the
+/// session's `default-shell` with formats expanded; empty when unset.
+///
+/// tmux runs a popup command as a job through default-shell and opens
+/// default-shell for an empty popup. psmux hardcoded `pwsh -NoProfile
+/// -Command` for a command string and the SHELL/pwsh walk for an empty popup,
+/// whatever default-shell said. With default-shell unset every branch builds
+/// exactly what it did before.
+pub(crate) fn popup_command_builder(command: &str, default_shell: &str) -> portable_pty::CommandBuilder {
+    let shell = crate::pane::command_shell_for(default_shell);
+    if command.trim().is_empty() {
+        // tmux parity (#351): an empty popup is an interactive shell.
+        return if shell.is_some() {
+            crate::pane::build_default_shell(default_shell, true, false)
+        } else {
+            crate::pane::build_command(None, true, false)
+        };
+    }
+    if command.trim_start().starts_with("-- ") {
+        // The `-- prog args...` argv form (#582) that new-pane's parser
+        // emits for a multi-token command after `--`. Handed to
+        // `pwsh -Command` it was the string "-- cmd.exe /q /k", which pwsh
+        // rejects at once, so the floating pane died as soon as it was made
+        // (issue #793 follow up). The tiled panes' builder decodes it.
+        return crate::pane::build_command_in(Some(command), shell.as_deref(), true, false);
+    }
+    #[cfg(windows)]
+    {
+        let is_powershell = shell.as_deref().map(|s| {
+            let stem = std::path::Path::new(s).file_stem()
+                .and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+            stem == "pwsh" || stem == "powershell"
+        });
+        match (shell.as_deref(), is_powershell) {
+            // A non PowerShell default-shell runs the command the way a
+            // pane command runs through it (`<shell> -c`, cmd `/C`).
+            (Some(s), Some(false)) => {
+                return crate::pane::build_command_in(Some(command), Some(s), true, false);
+            }
+            // default-shell pwsh/powershell: the same fast, profile free
+            // invocation as before, with the program it names.
+            (Some(s), _) => {
+                let mut builder = portable_pty::CommandBuilder::new(s);
+                builder.args(["-NoProfile", "-Command", command]);
+                return builder;
+            }
+            // Unset: exactly today's popup.
+            (None, _) => {
+                let mut builder = portable_pty::CommandBuilder::new("pwsh");
+                builder.args(["-NoProfile", "-Command", command]);
+                return builder;
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let mut builder = portable_pty::CommandBuilder::new(shell.as_deref().unwrap_or("sh"));
+        builder.args(["-c", command]);
+        builder
+    }
+}
+
 /// Spawn a PTY-backed `Pane` for use inside a popup overlay.
 ///
 /// This reuses the same PTY infrastructure as regular panes (ConPTY,
@@ -635,6 +698,7 @@ pub fn create_popup_pane(
     environment: &std::collections::HashMap<String, String>,
     env_removals: &[String],
     host_colors: Option<&crate::types::HostColors>,
+    default_shell: &str,
 ) -> Option<Pane> {
     let pty_sys = portable_pty::native_pty_system();
     let pty_size = portable_pty::PtySize {
@@ -645,26 +709,7 @@ pub fn create_popup_pane(
     };
     let pair = pty_sys.openpty(pty_size).ok()?;
 
-    let mut cmd_builder = if command.trim().is_empty() {
-        crate::pane::build_command(None, true, false)
-    } else if command.trim_start().starts_with("-- ") {
-        // The `-- prog args...` argv form (#582) that new-pane's parser
-        // emits for a multi-token command after `--`. Handed to
-        // `pwsh -Command` it was the string "-- cmd.exe /q /k", which pwsh
-        // rejects at once, so the floating pane died as soon as it was made
-        // (issue #793 follow up). The tiled panes' builder decodes it.
-        crate::pane::build_command(Some(command), true, false)
-    } else {
-        let mut builder = portable_pty::CommandBuilder::new(
-            if cfg!(windows) { "pwsh" } else { "sh" },
-        );
-        if cfg!(windows) {
-            builder.args(["-NoProfile", "-Command", command]);
-        } else {
-            builder.args(["-c", command]);
-        }
-        builder
-    };
+    let mut cmd_builder = popup_command_builder(command, default_shell);
     if let Some(dir) = start_dir {
         cmd_builder.cwd(dir);
     } else if let Ok(dir) = std::env::current_dir() {
@@ -1338,3 +1383,7 @@ mod test_display_popup_wait;
 #[cfg(test)]
 #[path = "../tests-rs/test_display_popup_close.rs"]
 mod test_display_popup_close;
+
+#[cfg(test)]
+#[path = "../tests-rs/test_popup_default_shell.rs"]
+mod test_popup_default_shell;

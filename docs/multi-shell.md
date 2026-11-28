@@ -59,7 +59,11 @@ A command string given to `split-window`, `new-window`, `respawn-pane` or
 through the shell named by the `SHELL` environment variable, or PowerShell when
 `SHELL` was unset, whatever `default-shell` said.
 
-With `default-shell` unset nothing changes: commands run exactly as before.
+`display-popup` and floating panes follow it too: a popup command runs through
+`default-shell`, and a popup with no command opens `default-shell`.
+
+With `default-shell` unset nothing changes: commands run exactly as before, and
+a popup command still runs in `pwsh -NoProfile`.
 
 If you set `default-shell` to bash or cmd, a binding written in PowerShell
 syntax now reaches that shell. Either keep `default-shell pwsh`, or start

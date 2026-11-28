@@ -109,6 +109,7 @@ fn running_popup(app: &mut AppState, command: &str) -> bool {
         &app.environment.clone(),
         &[],
         None,
+        "",
     );
     let Some(pane) = pane else { return false };
     app.popup_serial += 1;
@@ -165,6 +166,7 @@ fn a_popup_with_its_command_running_keeps_its_waiter_then_reports_the_status() {
         &app.environment.clone(),
         &[],
         None,
+        "",
     );
     let Some(pane) = pane else {
         eprintln!("skipped: the popup command could not be started here");

@@ -1773,6 +1773,7 @@ pub(crate) fn respawn_floating_pane(
             &app.environment,
             &removals,
             app.host_colors.as_ref(),
+            &crate::format::expand_format(&app.default_shell, &app),
         )
     };
     let Some(new_pane) = new_pane else {
@@ -3758,7 +3759,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         let cmdstr = cmd.clone().unwrap_or_default();
                         let sd = start_dir.clone().map(|d| expand_format(&d, &app)).filter(|d| !d.is_empty());
                         let pane_id = app.next_pane_id;
-                        if let Some(mut pane) = crate::popup::create_popup_pane(&cmdstr, sd.as_deref(), inner_h, inner_w, pane_id, &app.session_name, &app.environment, &app.env_scopes.child_removals(&app.environment), app.host_colors.as_ref()) {
+                        if let Some(mut pane) = crate::popup::create_popup_pane(&cmdstr, sd.as_deref(), inner_h, inner_w, pane_id, &app.session_name, &app.environment, &app.env_scopes.child_removals(&app.environment), app.host_colors.as_ref(), &expand_format(&app.default_shell, &app)) {
                             app.next_pane_id += 1;
                             let t = title.clone().unwrap_or_default();
                             if !t.is_empty() { pane.title = t.clone(); pane.title_locked = true; }
@@ -8375,6 +8376,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                             },
                             &app.env_scopes.child_removals(&app.environment),
                             app.host_colors.as_ref(),
+                            &crate::format::expand_format(&app.default_shell, &app),
                         )
                     };
                     if let Some(mut pane) = pane_opt {
