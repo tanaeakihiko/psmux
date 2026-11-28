@@ -198,7 +198,7 @@ if ($ready) {
     for ($i = 1; $i -le $runs; $i++) {
         $ns = "i654a$i"; $s = "a654r$i"
         $proc = Start-Console $ns $s $null
-        if (-not $proc) { Write-Info "run ${i}: the client did not come up"; continue }
+        if (-not $proc) { Write-Skip "run ${i}: not scored, the client or its byte logger did not come up"; continue }
         # The seven records conhost delivers for one press of Shift+Enter, in
         # ONE WriteConsoleInput call: ESC [ 1 3 ; 2 u, vk 0, scan 0, key down.
         & $injExe $proc.Id "hexseq:1b,5b,31,33,3b,32,75" 2>&1 | Out-Null
@@ -213,7 +213,7 @@ if ($ready) {
         Stop-Console $ns $s $proc
     }
     if ($done -eq 0) {
-        Write-Skip "no attached client came up, so the console path went untested"
+        Write-Fail "no attached client came up, so the console path went untested"
     } elseif ($hit -eq $done) {
         Write-Pass "$hit/$done runs: the pane's child received ESC CR, psmux's Shift+Enter encoding"
     } else {
@@ -243,7 +243,7 @@ if ($ready) {
         $s  = "b654" + $case.name.Replace("-", "")
         $conf = Write-Conf ("bind" + $case.name.Replace("-", "")) $case.conf
         $proc = Start-Console $ns $s $conf
-        if (-not $proc) { Write-Fail "$($case.name): the client did not come up"; continue }
+        if (-not $proc) { Write-Fail "$($case.name): the client or its byte logger did not come up"; continue }
         $before = PaneCount $ns $s
         & $injExe $proc.Id $case.spec 2>&1 | Out-Null
         Start-Sleep -Milliseconds 1800
@@ -275,7 +275,7 @@ if ($ready) {
     for ($i = 1; $i -le $runs; $i++) {
         $ns = "i654c$i"; $s = "c654r$i"
         $proc = Start-Console $ns $s $null
-        if (-not $proc) { Write-Info "run ${i}: the client did not come up"; continue }
+        if (-not $proc) { Write-Skip "run ${i}: not scored, the client or its byte logger did not come up"; continue }
         & $injExe $proc.Id "burst:PA[13;2uXY" 2>&1 | Out-Null
         Start-Sleep -Milliseconds 1800
         $cap = Capture $ns $s
@@ -287,7 +287,7 @@ if ($ready) {
         Stop-Console $ns $s $proc
     }
     if ($done -eq 0) {
-        Write-Skip "no attached client came up, so the paste guard went untested"
+        Write-Fail "no attached client came up, so the paste guard went untested"
     } elseif ($verbatim -eq $done) {
         Write-Pass "$verbatim/$done runs: a paste carrying [13;2u reached the child verbatim"
     } else {
@@ -298,7 +298,7 @@ if ($ready) {
     $ns = "i654ct"; $s = "c654typed"
     $proc = Start-Console $ns $s $null
     if (-not $proc) {
-        Write-Fail "typed bracket: the client did not come up"
+        Write-Fail "typed bracket: the client or its byte logger did not come up"
     } else {
         & $injExe $proc.Id "type:[ab:60" 2>&1 | Out-Null
         Start-Sleep -Milliseconds 1500
@@ -376,7 +376,7 @@ if (-not $bash) {
             $up = Start-Link $i $so $si
         }
         if (-not $up) {
-            Write-Info "run ${i}: the ConPTY link did not come up"
+            Write-Skip "run ${i}: not scored, the ConPTY link or its byte logger did not come up"
             Stop-Link $so $si
             continue
         }
@@ -390,7 +390,7 @@ if (-not $bash) {
         Stop-Link $so $si
     }
     if ($done -eq 0) {
-        Write-Skip "no ConPTY link came up, so the VT path went untested"
+        Write-Fail "no ConPTY link came up, so the VT path went untested"
     } elseif ([Environment]::OSVersion.Version.Build -lt 22000 -and -not $env:PSMUX_CONPTY_DIR) {
         if ($hit -eq 0) { Write-Pass "0/$done runs: the outer pane's inbox conhost hands the client inside no CSI 13;2u on this host" }
         else { Write-Fail "$hit/$done runs got CSI 13;2u through the inbox conhost of Windows 10, which passed none when measured" }
@@ -409,7 +409,7 @@ if (-not $bash) {
         $up = Start-Link 0 $so $si
     }
     if (-not $up) {
-        Write-Skip "control: the ConPTY link did not come up"
+        Write-Fail "control: the ConPTY link or its byte logger did not come up, so the harness is unproven"
     } else {
         & $PSMUX -L $NS_OUT send-keys -t $so -H 41 0d 42 2>&1 | Out-Null
         Start-Sleep -Milliseconds 1500
