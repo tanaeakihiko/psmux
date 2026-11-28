@@ -42,7 +42,9 @@ $DRAG = Join-Path $root "drag.exe"
 & $csc /nologo /platform:x64 /out:$CHILD "$PSScriptRoot\rec860.cs" 2>&1 | Out-Null
 & $csc /nologo /out:$CLICK "$PSScriptRoot\click_injector.cs" 2>&1 | Out-Null
 & $csc /nologo /out:$DRAG "$PSScriptRoot\mouse_drag_hold_injector.cs" 2>&1 | Out-Null
-if (-not (Test-Path $CHILD) -or -not (Test-Path $CLICK) -or -not (Test-Path $DRAG)) { Write-Host "could not build the C# helpers" -ForegroundColor Red; exit 1 }
+$WHEEL = Join-Path $root "wheel.exe"
+& $csc /nologo /out:$WHEEL "$PSScriptRoot\mouse_injector.cs" 2>&1 | Out-Null
+if (-not (Test-Path $CHILD) -or -not (Test-Path $CLICK) -or -not (Test-Path $DRAG) -or -not (Test-Path $WHEEL)) { Write-Host "could not build the C# helpers" -ForegroundColor Red; exit 1 }
 Write-Info ("psmux: {0}  ({1})" -f $PSMUX, ((& $PSMUX -V) -join ' '))
 
 $MOUSE_ON = '\e[?1000h\e[?1006hready'
@@ -53,6 +55,15 @@ function P { & $PSMUX -L $NS @args 2>&1 }
 function Active { (P display-message -t $S -p '#{pane_id}' | Out-String).Trim() }
 function Geo($id) { (P display-message -t $id -p '#{pane_left} #{pane_top} #{pane_width} #{pane_height}' | Out-String).Trim() }
 function Click($x, $y) { & $CLICK $script:client $x $y | Out-Null; Start-Sleep -Milliseconds 700 }
+# SGR wheel reports a child read: button 64/65 vertical, 66/67 horizontal
+# (with no modifier bits).
+function Wheel-Reports($log, $btn) {
+    $n = 0
+    foreach ($l in @(Get-Content $log -EA SilentlyContinue)) {
+        if ($l -match '^BYTES .*str=\[(.*)\]$') { $n += ([regex]::Matches($Matches[1], "<ESC>\[<$btn;\d+;\d+M")).Count }
+    }
+    $n
+}
 function Drag($x1, $y1, $x2, $y2) {
     $steps = [Math]::Max([Math]::Abs($x2 - $x1), [Math]::Abs($y2 - $y1))
     & $DRAG $script:client $x1 $y1 $x2 $y2 $steps 40 150 | Out-Null
@@ -135,7 +146,27 @@ mode con cols=100 lines=30
     $want2 = "{0} {1} {2} {3}" -f $p1[0], $p1[1], $p1[2], ([int]$p1[3] + 2)
     Check ($g -eq $want2) "A is 2 taller [$g]" "A is [$g], want [$want2]"
 
-    Write-Host "`n[Test 5] a zoomed tiled pane under the float" -ForegroundColor Yellow
+    Write-Host "`n[Test 5] the wheel over the float, up and down and sideways" -ForegroundColor Yellow
+    # tmux WheelUpPane / WheelDownPane and the horizontal MouseDown6Pane /
+    # MouseDown7Pane: over a floating pane whose program asked for the
+    # mouse, the report goes to that program (send -M), never to the tiled
+    # pane under it. A's content starts at window (26,9): screen (26,10).
+    $tBefore = Wheel-Reports $LOG_T '6[4-7]'
+    $vBefore = Wheel-Reports $LOG_A '6[45]'
+    & $WHEEL $script:client up 2 30 12 | Out-Null
+    Start-Sleep -Milliseconds 900
+    $v = (Wheel-Reports $LOG_A '6[45]') - $vBefore
+    Check ($v -ge 2) "a vertical notch reaches A's program ($v reports)" "A's program got $v vertical wheel reports, want 2"
+    $hBefore = Wheel-Reports $LOG_A '6[67]'
+    & $WHEEL $script:client right 2 30 12 | Out-Null
+    & $WHEEL $script:client left 1 30 12 | Out-Null
+    Start-Sleep -Milliseconds 900
+    $h = (Wheel-Reports $LOG_A '6[67]') - $hBefore
+    Check ($h -ge 3) "a sideways notch reaches A's program ($h reports)" "A's program got $h horizontal wheel reports, want 3"
+    $t = (Wheel-Reports $LOG_T '6[4-7]') - $tBefore
+    Check ($t -eq 0) "the tiled program under A got no wheel" "the tiled program got $t wheel reports meant for A"
+
+    Write-Host "`n[Test 6] a zoomed tiled pane under the float" -ForegroundColor Yellow
     P split-window -t $T -h -- $CHILD vt (Join-Path $root "t2.txt") $MOUSE_ON | Out-Null
     Start-Sleep -Milliseconds 800
     P select-pane -t $T | Out-Null

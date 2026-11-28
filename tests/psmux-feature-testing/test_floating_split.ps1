@@ -18,6 +18,10 @@ function Stop-All {
     Remove-Item "$psmuxDir\$S.*" -Force -EA SilentlyContinue
 }
 function DS { (& $PSMUX dump-state 2>&1) -join "" }
+# The tiled panes only: list-panes lists a window's floating panes too (after
+# the tiled ones, as tmux does since #767), so count the rows whose
+# pane_floating_flag is 0.
+function TiledCount { @(& $PSMUX list-panes -t $S -F '#{pane_floating_flag}' 2>&1 | Where-Object { "$_".Trim() -eq '0' }).Count }
 function FloatCount([string]$json) {
     $m = [regex]::Match($json, '"floats"\s*:\s*\[(.*)$')
     if (-not $m.Success) { return 0 }
@@ -35,7 +39,7 @@ Stop-All
 Start-Sleep -Seconds 2
 
 # One tiled pane baseline.
-$panes0 = (& $PSMUX list-panes -t $S 2>&1 | Measure-Object -Line).Lines
+$panes0 = TiledCount
 
 # Create a focused float (tmux flags: -X/-Y position, -x/-y size).
 & $PSMUX new-pane -X 10 -Y 5 -x 30 -y 10 2>&1 | Out-Null
@@ -50,8 +54,9 @@ $c2 = FloatCount (DS)
 Check "split-makes-float" ($c2 -eq 2) "float count after split = $c2 (expected 2)"
 
 # The tiled layout must be untouched (still a single tiled pane).
-$panes1 = (& $PSMUX list-panes -t $S 2>&1 | Measure-Object -Line).Lines
-Check "layout-untouched" ($panes1 -eq $panes0) "tiled pane count unchanged ($panes0 -> $panes1)"
+$panes1 = TiledCount
+$all1 = @(& $PSMUX list-panes -t $S -F '#{pane_floating_flag}' 2>&1).Count
+Check "layout-untouched" ($panes0 -eq 1 -and $panes1 -eq $panes0) "tiled pane count unchanged ($panes0 -> $panes1, $all1 panes listed with the floats)"
 
 Stop-All
 Write-Host ""
