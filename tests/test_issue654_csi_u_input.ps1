@@ -80,9 +80,30 @@ if (-not $bash) {
     $bcmd = Get-Command bash -EA SilentlyContinue
     if ($bcmd) { $bash = $bcmd.Source }
 }
+# The logger prints LOGGER_READY once stty has put the console in raw mode,
+# and the harness sends nothing before that word is on the pane.  Git Bash can
+# take far longer to start than any fixed pause: on a busy host bash -c alone
+# took 5 to 12 s, and bash -c "stty ...; cat -v" under a nested psmux 20 to
+# 55 s before cat.exe existed, so a key sent after the old 2 s pause reached a
+# console nobody was reading in raw mode yet, and the run read as "nothing
+# arrived" even for the plain byte control of Part D.
 $logger = Join-Path $tmp "bytelog654.cmd"
 if ($bash) {
-    "@echo off`r`n`"$bash`" -c `"stty raw -echo; cat -v`"`r`n" | Set-Content $logger -Encoding ASCII
+    "@echo off`r`n`"$bash`" -c `"stty raw -echo; printf LOGGER_READY; cat -v`"`r`n" | Set-Content $logger -Encoding ASCII
+}
+$LoggerReadySec = 120
+
+# Wait until the logger in $sess has printed LOGGER_READY.
+function Wait-Logger($ns, $sess) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt $LoggerReadySec) {
+        $cap = (& $PSMUX -L $ns capture-pane -t $sess -p 2>&1 | Out-String)
+        if ($cap -match "LOGGER_READY") { return $true }
+        if ($cap -match "no server running|no such session|can't find") { return $false }
+        Start-Sleep -Milliseconds 250
+    }
+    Write-Info "the byte logger in $sess did not start within $LoggerReadySec s"
+    return $false
 }
 
 # ── The record injector ─────────────────────────────────────────────────────
@@ -127,10 +148,8 @@ function Start-Console($ns, $sess, $conf) {
             & $PSMUX -L $ns has-session -t $sess 2>$null
             if ($LASTEXITCODE -eq 0) { $ok = $true; break }
         }
-        if ($ok) {
-            Start-Sleep -Seconds 2   # let the pane's child finish coming up
-            return $proc
-        }
+        # The pane's child must be reading in raw mode before a record goes in.
+        if ($ok -and (Wait-Logger $ns $sess)) { return $proc }
         try { if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -EA SilentlyContinue } } catch {}
         $script:OpenedPids = $script:OpenedPids | Where-Object { $_ -ne $proc.Id }
         & $PSMUX -L $ns kill-server 2>&1 | Out-Null
@@ -326,7 +345,7 @@ function Start-Link($idx, $sessOut, $sessIn) {
     foreach ($tick in 1..20) {
         Start-Sleep -Seconds 1
         & $PSMUX -L $NS_IN has-session -t $sessIn 2>$null
-        if ($LASTEXITCODE -eq 0) { Start-Sleep -Seconds 2; return $true }
+        if ($LASTEXITCODE -eq 0) { return (Wait-Logger $NS_IN $sessIn) }
     }
     return $false
 }
