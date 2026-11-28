@@ -70,8 +70,14 @@ function Wait-FarmGuest {
 }
 
 function New-FarmSession {
-    param([Parameter(Mandatory)] [string]$Name)
-    New-PSSession -VMName $Name -Credential (Get-FarmCredential) -ErrorAction Stop
+    param([Parameter(Mandatory)] [string]$Name, [int]$TimeoutSec = 180)
+    # Right after a checkpoint restore PowerShell Direct can refuse a valid
+    # credential ("The credential is invalid") for a while; retry.
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ($true) {
+        try { return (New-PSSession -VMName $Name -Credential (Get-FarmCredential) -ErrorAction Stop) }
+        catch { if ((Get-Date) -gt $deadline) { throw } ; Start-Sleep -Seconds 5 }
+    }
 }
 
 # Copy the verified installers and the OpenConsole fixture in, then install.
@@ -114,6 +120,7 @@ function Install-FarmGuest {
         }
         $s = New-FarmSession $Name
         Invoke-Command -Session $s { Unregister-ScheduledTask -TaskName 'vmfarm-tools' -Confirm:$false -ErrorAction SilentlyContinue }
+        Invoke-Command -Session $s -FilePath (Join-Path $PSScriptRoot 'guest\Tune-Guest.ps1')
         # The OpenConsole fixture some suites use, at the path they expect.
         $occ = Join-Path $env:TEMP 'occ-conpty\nugetstable'
         if (Test-Path $occ) {

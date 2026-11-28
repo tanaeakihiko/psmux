@@ -105,6 +105,7 @@ Say "checkpoints restored, VMs running"
 $shards = @()
 for ($i = 1; $i -le $ShardCount; $i++) {
     $vm = $VMNames[$i - 1]
+    try {
     Wait-FarmGuest -Name $vm -TimeoutSec 600 | Out-Null
     $s = New-FarmSession $vm
     Invoke-Command -Session $s { Remove-Item C:\psmux -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force C:\psmux\tests, C:\psmux\target\release | Out-Null }
@@ -128,6 +129,12 @@ for ($i = 1; $i -le $ShardCount; $i++) {
         Done = $false; ExitCode = $null; Outcome = 'running'; Finished = $null; StallReported = $false; StopSent = $null
     }
     Say ("shard {0} started on {1} ({2} suites, est {3:N0} min, deadline {4} min)" -f $i, $vm, $plan[$i - 1].Suites.Count, ($est / 60), $deadlineMin) 'Cyan'
+    } catch {
+        Say ("shard {0} on {1} FAILED TO START: {2}" -f $i, $vm, $_.Exception.Message) 'Red'
+        $dir = Join-Path $out "shard$i"; New-Item -ItemType Directory -Force $dir | Out-Null
+        $shards += [pscustomobject]@{ Index = $i; VM = $vm; Session = $null; Started = Get-Date; Deadline = Get-Date; DeadlineMin = 0; Dir = $dir
+            GuestRunDir = $null; ProgressLen = 0; LastChange = Get-Date; Done = $true; ExitCode = $null; Outcome = 'start-failed'; Finished = Get-Date; StallReported = $false; StopSent = $null }
+    }
 }
 
 function Get-GuestState($sh) {
