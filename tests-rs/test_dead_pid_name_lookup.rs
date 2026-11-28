@@ -96,11 +96,21 @@ fn dead_pid_lookup_walks_no_process_table() {
     }
 }
 
+/// The test binary is built for each of psmux, pmux and tmux (they share
+/// src/main.rs), so its image name is `<bin>-<hash>`, not always `psmux`.
+fn names_this_test_binary(got: &str) -> bool {
+    let exe = std::env::current_exe().expect("current exe");
+    let stem = exe.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
+    let got = got.to_ascii_lowercase();
+    let got = got.strip_suffix(".exe").unwrap_or(&got);
+    !stem.is_empty() && got == stem
+}
+
 #[test]
 fn live_pid_lookup_still_answers() {
     let me = std::process::id();
     let got = get_process_name_or_snapshot(me).expect("own process must be found");
-    assert!(got.to_ascii_lowercase().starts_with("psmux"), "own image name, got {got}");
+    assert!(names_this_test_binary(&got), "own image name, got {got}");
 }
 
 #[test]
@@ -108,7 +118,7 @@ fn snapshot_answer_for_a_live_pid_is_unchanged() {
     // The #650 fallback itself: the table names a live process.
     let me = std::process::id();
     let got = process_name_from_snapshot(me).expect("own pid must be in the table");
-    assert!(got.to_ascii_lowercase().starts_with("psmux"), "snapshot image name, got {got}");
+    assert!(names_this_test_binary(&got), "snapshot image name, got {got}");
 }
 
 #[test]
