@@ -153,6 +153,8 @@ function Get-GuestState($sh) {
         }
         $e = 'C:\vmfarm-shard\exit.txt'
         if (Test-Path $e) { $r.Exit = (Get-Content $e -Raw).Trim() }
+        $t = Get-ScheduledTask -TaskName 'vmfarm-shard' -ErrorAction SilentlyContinue
+        $r.TaskState = if ($t) { [string]$t.State } else { 'missing' }
         $r
     }
 }
@@ -187,6 +189,11 @@ while (@($shards | Where-Object { -not $_.Done }).Count -gt 0) {
                 $sh.Done = $true; $sh.ExitCode = [int]$st.Exit; $sh.Finished = $now
                 $sh.Outcome = if ($sh.StopSent) { 'deadline-stopped' } else { 'finished' }
                 Say ("shard {0} {1} (runner exit {2}) after {3:N1} min" -f $sh.Index, $sh.Outcome, $sh.ExitCode, ($now - $sh.Started).TotalMinutes) 'Cyan'
+                continue
+            }
+            if ($st.TaskState -ne 'Running' -and ($now - $sh.Started).TotalSeconds -gt 60) {
+                $sh.Done = $true; $sh.Finished = $now; $sh.Outcome = 'runner-died'
+                Say ("shard {0}: the desktop task is {1} but wrote no exit code; the runner died" -f $sh.Index, $st.TaskState) 'Red'
                 continue
             }
         }

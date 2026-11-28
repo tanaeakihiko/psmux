@@ -57,8 +57,15 @@ try {
         $osL  = (Get-Partition -DiskNumber $disk.Number -PartitionNumber $os.PartitionNumber).DriveLetter
 
         Expand-WindowsImage -ImagePath $wim -Index $img.ImageIndex -ApplyPath "${osL}:\" | Out-Null
+        # The image's own bcdboot first; the 26200 one fails on a 26300 host
+        # (0xC0E90002, no output), and the host's copies the same files from
+        # the target \Windows\Boot, so it is the fallback.
         & "${osL}:\Windows\System32\bcdboot.exe" "${osL}:\Windows" /s "${sysL}:" /f UEFI | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw "bcdboot failed ($LASTEXITCODE)" }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "image bcdboot failed ($LASTEXITCODE); using the host's"
+            & "$env:SystemRoot\System32\bcdboot.exe" "${osL}:\Windows" /s "${sysL}:" /f UEFI | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "bcdboot failed ($LASTEXITCODE)" }
+        }
 
         $panther = "${osL}:\Windows\Panther"
         New-Item -ItemType Directory -Force $panther | Out-Null

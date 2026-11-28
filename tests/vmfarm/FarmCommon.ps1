@@ -194,13 +194,30 @@ function Wait-FarmDesktopJob {
     param(
         [Parameter(Mandatory)] [System.Management.Automation.Runspaces.PSSession]$Session,
         [Parameter(Mandatory)] [string]$WorkDir,
+        [string]$TaskName,
         [int]$TimeoutSec = 3600
     )
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $t0 = Get-Date
     while ((Get-Date) -lt $deadline) {
-        $code = Invoke-Command -Session $Session -ArgumentList $WorkDir -ScriptBlock {
-            param($w) $f = Join-Path $w 'exit.txt'; if (Test-Path $f) { (Get-Content $f -Raw).Trim() } }
-        if ($null -ne $code -and "$code" -ne '') { return [int]$code }
+        $r = Invoke-Command -Session $Session -ArgumentList $WorkDir, $TaskName -ScriptBlock {
+            param($w, $tn)
+            $f = Join-Path $w 'exit.txt'
+            $o = @{ Code = $null; State = $null; Last = $null }
+            if (Test-Path $f) { $o.Code = (Get-Content $f -Raw).Trim() }
+            if ($tn) { $t = Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
+                if ($t) { $o.State = [string]$t.State; $o.Last = ($t | Get-ScheduledTaskInfo).LastTaskResult } }
+            $o }
+        if ($null -ne $r.Code -and "$($r.Code)" -ne '') { return [int]$r.Code }
+        # The wrapper itself died (it writes exit.txt last): say so instead of
+        # waiting out the whole timeout.
+        if ($r.State -eq 'Ready' -and ((Get-Date) - $t0).TotalSeconds -gt 15) {
+            Start-Sleep -Seconds 2
+            $again = Invoke-Command -Session $Session -ArgumentList $WorkDir { param($w) $f = Join-Path $w 'exit.txt'; if (Test-Path $f) { (Get-Content $f -Raw).Trim() } }
+            if ($again) { return [int]$again }
+            Write-Warning ("the desktop task ended without writing exit.txt (task result 0x{0:X8})" -f $r.Last)
+            return 98
+        }
         Start-Sleep -Seconds 3
     }
     return $null

@@ -72,7 +72,7 @@ try {
             $envs['PSMUX_VMFARM_PREPEND'] = "$gwork\bin"
         }
         $task = Start-FarmDesktopJob -Session $s -GuestScript $gscript -WorkDir $gwork -Arguments $Arguments -Environment $envs
-        $code = Wait-FarmDesktopJob -Session $s -WorkDir $gwork -TimeoutSec $TimeoutSec
+        $code = Wait-FarmDesktopJob -Session $s -WorkDir $gwork -TaskName $task -TimeoutSec $TimeoutSec
         Invoke-Command -Session $s -ArgumentList $task { param($t) Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue }
         if ($null -eq $code) { Write-Warning "timed out after $TimeoutSec s; the guest process may still be running (task folder $gwork)" }
     }
