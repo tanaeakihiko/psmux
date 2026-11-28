@@ -3790,6 +3790,76 @@ fn bare_program_image(token: &str) -> Option<String> {
     Some(resolved)
 }
 
+/// The `cat` placeholder blocker in PowerShell: drain stdin until EOF, then
+/// sleep forever (#580).
+pub(crate) const POWERSHELL_CAT_BLOCKER: &str =
+    "$__psmux_in=[Console]::In; while($__psmux_in.Read() -ge 0){}; Start-Sleep -Seconds 2147483";
+/// The same blocker for a POSIX shell, using only builtins until EOF so it
+/// does not depend on `cat` being on the pane's PATH.
+pub(crate) const POSIX_CAT_BLOCKER: &str =
+    "while read -r _psmux_l; do :; done; exec sleep 2147483";
+/// fish has its own loop syntax.
+pub(crate) const FISH_CAT_BLOCKER: &str =
+    "while read -l _psmux_l; end; exec sleep 2147483";
+
+/// How the `cat` placeholder is started for a given default shell (#1115).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CatBlocker {
+    /// The pane shell is PowerShell: run this script through it as before.
+    PaneShell(&'static str),
+    /// The pane shell is a POSIX style shell: run `<shell> -c <script>`.
+    PosixShell(&'static str),
+    /// cmd.exe or any other shell that cannot express a blocker: start
+    /// PowerShell itself with the PowerShell blocker.
+    PowerShellDirect,
+}
+
+/// Pick the `cat` blocker for the shell `build_command` would use. `None`
+/// is the no shell fallback, which is pwsh.exe.
+pub(crate) fn cat_blocker_for_shell(shell: Option<&str>) -> CatBlocker {
+    let Some(path) = shell else { return CatBlocker::PaneShell(POWERSHELL_CAT_BLOCKER) };
+    // The same classification the shell route below uses for `-c`.
+    let stem = std::path::Path::new(path.trim().trim_matches('"'))
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match stem.as_str() {
+        "pwsh" | "powershell" => CatBlocker::PaneShell(POWERSHELL_CAT_BLOCKER),
+        "fish" => CatBlocker::PosixShell(FISH_CAT_BLOCKER),
+        "bash" | "sh" | "zsh" | "dash" | "ash" | "ksh" | "mksh" => {
+            CatBlocker::PosixShell(POSIX_CAT_BLOCKER)
+        }
+        _ => CatBlocker::PowerShellDirect,
+    }
+}
+
+/// The environment every pane gets, for the blocker builders.
+#[cfg(windows)]
+fn apply_blocker_env(builder: &mut CommandBuilder, cwd: Option<&std::path::Path>) {
+    if let Some(dir) = cwd { builder.cwd(dir); }
+    apply_bare_env_if_set(builder);
+    builder.env("TERM", "xterm-256color");
+    builder.env("COLORTERM", "truecolor");
+    builder.env("PSMUX_SESSION", "1");
+}
+
+/// A PowerShell to run the blocker when the pane shell is not one: pwsh, then
+/// Windows PowerShell (never a Store pwsh where that cannot start).
+#[cfg(windows)]
+fn blocker_powershell() -> String {
+    let store_unusable = store_shell_unusable();
+    for name in ["pwsh", "powershell"] {
+        if let Ok(p) = which::which(name) {
+            let p = p.to_string_lossy().into_owned();
+            if !(is_store_shell_path(&p) && store_unusable) {
+                return p;
+            }
+        }
+    }
+    "powershell.exe".to_string()
+}
+
 pub fn build_command(command: Option<&str>, env_shim: bool, allow_predictions: bool) -> CommandBuilder {
     // Capture CWD early — portable_pty on Windows defaults to USERPROFILE
     // (home dir) when no cwd is set on CommandBuilder, so we must set it
@@ -3804,10 +3874,31 @@ pub fn build_command(command: Option<&str>, env_shim: bool, allow_predictions: b
     // and discard stdin until EOF, then sleep forever (a ConPTY pane's stdin
     // never reaches EOF while the pane lives, so this blocks exactly like
     // `cat > /dev/null`). `respawn-pane -k` replaces it just like tmux.
+    //
+    // The blocker has to be written in the language of the shell that runs
+    // it (#1115): with SHELL set to Git Bash or cmd.exe the PowerShell blocker
+    // was a syntax error and the placeholder died before `respawn-pane -k`
+    // could reach it.
     #[cfg(windows)]
     let command: Option<&str> = match command {
         Some(c) if matches!(c.trim(), "cat" | "cat -") => {
-            Some("$__psmux_in=[Console]::In; while($__psmux_in.Read() -ge 0){}; Start-Sleep -Seconds 2147483")
+            let shell = cached_shell();
+            match cat_blocker_for_shell(shell) {
+                // Unchanged default route: the pane's PowerShell runs it.
+                CatBlocker::PaneShell(script) => Some(script),
+                CatBlocker::PosixShell(script) => {
+                    let mut builder = CommandBuilder::new(shell.unwrap_or("sh"));
+                    apply_blocker_env(&mut builder, cwd.as_deref());
+                    builder.args(["-c", script]);
+                    return builder;
+                }
+                CatBlocker::PowerShellDirect => {
+                    let mut builder = CommandBuilder::new(blocker_powershell());
+                    apply_blocker_env(&mut builder, cwd.as_deref());
+                    builder.args(["-NoLogo", "-NoProfile", "-Command", POWERSHELL_CAT_BLOCKER]);
+                    return builder;
+                }
+            }
         }
         other => other,
     };
@@ -5824,3 +5915,6 @@ mod test_issue794_argv_metachars;
 #[cfg(test)]
 #[path = "../tests-rs/test_issue924_store_shell_session0.rs"]
 mod test_issue924_store_shell_session0;
+#[cfg(test)]
+#[path = "../tests-rs/test_issue1115_cat_blocker_shell.rs"]
+mod test_issue1115_cat_blocker_shell;
