@@ -272,10 +272,14 @@ function Measure-Start {
             # The warm server is PER NAMESPACE (<ns>____warm__.port). Reset-All
             # wiped it, so prime it the way a real machine has it primed: create
             # and tear down a throwaway session, then wait for the spare to exist.
+            # The primer spawns the spare only once its own first shell has
+            # started (the boot hold), so it must live until the spare's
+            # .port exists: killing it at once left 0 of 15 iterations with a
+            # spare, and the "warm" rows timed cold starts.
             & $Psmux -L $Ns new-session -d -s primer 2>&1 | Out-Null
-            & $Psmux -L $Ns kill-session -t primer 2>&1 | Out-Null
             $swp = [Diagnostics.Stopwatch]::StartNew()
             while ($swp.ElapsedMilliseconds -lt 10000 -and -not (Test-Path $warmFile)) { Start-Sleep -Milliseconds 20 }
+            & $Psmux -L $Ns kill-session -t primer 2>&1 | Out-Null
             if (-not (Test-Path $warmFile)) { Write-Host "    (iter ${i}: warm spare never appeared)" -ForegroundColor DarkYellow }
             else { $warmHit++ }
             # A real machine's spare has been sitting ready for minutes, so its

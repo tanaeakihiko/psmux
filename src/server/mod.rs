@@ -900,6 +900,9 @@ fn warm_empty_grace() -> Duration {
 /// When this standby first saw its namespace empty, while it still is.
 static WARM_EMPTY_SINCE: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
 
+/// When the registry was last read for a live peer, once the grace is over.
+static WARM_EMPTY_LAST_WALK: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
 /// Whether this unclaimed standby must end, and why. See
 /// `session::warm_standby_verdict` for the rule and why it closes the
 /// kill-server race; this only gathers the facts.
@@ -923,35 +926,55 @@ fn check_warm_standby_orphaned(app: &AppState) -> crate::session::WarmStandbyVer
         live_peer: None,
         held: app.is_held_standby(),
     };
-    // The registry walk is only needed once the spawner is gone.
-    if facts.spawner_creation.is_some() && !facts.spawner_alive {
-        facts.live_peer = Some(crate::session::namespace_has_live_peer(
-            dir_path,
-            app.socket_name.as_deref(),
-            std::process::id(),
-            |pid| {
-                if crate::platform::process_is_alive(pid) {
-                    crate::platform::process_kill::process_creation_time(pid)
-                } else {
-                    None
-                }
-            },
-        ));
-    }
-    let verdict = crate::session::warm_standby_verdict_with_peers(&facts);
+    // A kill or a deleted data dir ends the standby at once, as before.
+    let base = crate::session::warm_standby_verdict(&facts);
     let mut since = WARM_EMPTY_SINCE.lock().unwrap_or_else(|e| e.into_inner());
-    let now = Instant::now();
-    if verdict != crate::session::WarmStandbyVerdict::NamespaceEmpty {
-        // A peer came back (or a kill verdict, which needs no grace).
+    if base != crate::session::WarmStandbyVerdict::Keep {
         *since = None;
-        return verdict;
+        return base;
     }
+    // Only a standby whose spawner is gone (and is not the held empty server)
+    // can be in an emptied namespace. Everything else is master's check.
+    if facts.spawner_creation.is_none() || facts.spawner_alive || facts.held {
+        *since = None;
+        return base;
+    }
+    // The grace runs on this process's own clock, and the registry is NOT
+    // read while it runs: this check sits on the server thread that also
+    // answers claim-session, so a walk every tick slowed the warm claim the
+    // grace exists to keep (about 35 ms at p50). It is read once the grace is
+    // over, and then at most once a second: a live peer starts the grace
+    // again, none ends the standby.
+    let now = Instant::now();
     let first = *since.get_or_insert(now);
-    if crate::session::warm_empty_grace_over(first, now, warm_empty_grace()) {
-        verdict
-    } else {
-        crate::session::WarmStandbyVerdict::Keep
+    if !crate::session::warm_empty_grace_over(first, now, warm_empty_grace()) {
+        return crate::session::WarmStandbyVerdict::Keep;
     }
+    let mut last = WARM_EMPTY_LAST_WALK.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_some_and(|t| now.saturating_duration_since(t) < Duration::from_secs(1)) {
+        return crate::session::WarmStandbyVerdict::Keep;
+    }
+    *last = Some(now);
+    facts.live_peer = Some(crate::session::namespace_has_live_peer(
+        dir_path,
+        app.socket_name.as_deref(),
+        std::process::id(),
+        |pid| {
+            if crate::platform::process_is_alive(pid) {
+                crate::platform::process_kill::process_creation_time(pid)
+            } else {
+                None
+            }
+        },
+    ));
+    let verdict = crate::session::warm_standby_verdict_with_peers(&facts);
+    if verdict != crate::session::WarmStandbyVerdict::NamespaceEmpty {
+        // A server of the namespace is running again: a new grace for the
+        // next time it empties.
+        *since = Some(now);
+        return crate::session::WarmStandbyVerdict::Keep;
+    }
+    verdict
 }
 
 /// Spawn a standby "warm server" process that pre-loads config + shell.
