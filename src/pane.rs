@@ -3884,7 +3884,12 @@ pub fn command_shell_for(default_shell: &str) -> Option<String> {
     let (program, _args) = resolve_shell_program(value);
     let program = remap_git_bash_launcher(program);
     let resolved = cached_which(&program);
-    if std::path::Path::new(&resolved).is_file() { Some(resolved) } else { None }
+    if !std::path::Path::new(&resolved).is_file() { return None; }
+    // A Store packaged shell cannot start under SSH or in session 0 (#924);
+    // cached_shell already degrades to classic PowerShell there, so keep that
+    // rather than fail every command spawn.
+    if is_store_shell_path(&resolved) && store_shell_unusable() { return None; }
+    Some(resolved)
 }
 
 /// [`build_command`] with the shell that runs a command string named:
