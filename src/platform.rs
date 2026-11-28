@@ -4628,19 +4628,32 @@ pub mod process_info {
     /// [`get_process_name`] that also says why it failed: `Err` carries
     /// `GetLastError` when `OpenProcess` itself failed, or 0 when the handle
     /// opened but the image name could not be read.
+    ///
+    /// A process that has exited but whose process object is still held open
+    /// by someone else (antivirus inspecting a process that just ended is the
+    /// usual one) opens fine and then fails the image name query. It is gone
+    /// all the same, so it reports ERROR_INVALID_PARAMETER like a PID with no
+    /// object at all, which [`name_or_snapshot`] answers without a walk.
     fn process_name_by_handle(pid: u32) -> Result<String, u32> {
         #[link(name = "kernel32")]
         extern "system" {
             fn GetLastError() -> u32;
+            fn GetExitCodeProcess(h_process: isize, lp_exit_code: *mut u32) -> i32;
         }
+        const STILL_ACTIVE: u32 = 259;
         unsafe {
             let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if h == 0 || h == -1 { return Err(GetLastError()); }
             let mut buf = [0u16; 1024];
             let mut size = buf.len() as u32;
             let ok = QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut size);
+            if ok == 0 {
+                let mut code = STILL_ACTIVE;
+                let exited = GetExitCodeProcess(h, &mut code) != 0 && code != STILL_ACTIVE;
+                CloseHandle(h);
+                return Err(if exited { ERROR_INVALID_PARAMETER } else { 0 });
+            }
             CloseHandle(h);
-            if ok == 0 { return Err(0); }
             let full_path = OsString::from_wide(&buf[..size as usize])
                 .to_string_lossy()
                 .into_owned();

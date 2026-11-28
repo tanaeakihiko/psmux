@@ -87,11 +87,12 @@ fn dead_pid_is_reported_as_no_such_process_by_openprocess() {
 #[test]
 fn dead_pid_lookup_walks_no_process_table() {
     let pid = dead_pid();
+    let by_handle = process_name_by_handle(pid);
     let before = walks();
     let got = get_process_name_or_snapshot(pid);
     let walked = walks() - before;
     if got.is_none() {
-        assert_eq!(walked, 0, "a dead pid must be answered without a process table walk");
+        assert_eq!(walked, 0, "a dead pid must be answered without a process table walk (handle said {by_handle:?})");
     }
 }
 
