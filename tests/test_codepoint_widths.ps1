@@ -40,8 +40,9 @@
 #
 # The inbox console host of Windows 10 (build 19045) ends a full row with CR
 # LF instead of letting it wrap, at its own widths, so there 15 U+4E2D come
-# back as 10 + 5 whatever width psmux gives them. With PSMUX_CONPTY_DIR the
-# pane runs on OpenConsole, which wraps.
+# back as 10 + 5 whatever width psmux gives them, and the check that narrows
+# U+4E2D is reported as skipped there. With PSMUX_CONPTY_DIR the pane runs on
+# OpenConsole, which wraps.
 
 $ErrorActionPreference = "Continue"
 
@@ -339,12 +340,9 @@ foreach ($r in $rows) {
 }
 $hanShape = ($hanCounts -join ",")
 if ($Win10Inbox) {
-    # The host broke the row after 10 by its own widths (see the header).
-    if ($hanShape -eq "10,5") {
-        Write-Pass "the Windows 10 inbox host broke the row at its own width (shape $hanShape)"
-    } else {
-        Write-Fail "expected the Windows 10 inbox host to break the row '10,5', got '$hanShape'"
-    }
+    # The host breaks the row after 10 by its own widths (see the header), so
+    # the shape says nothing about the width psmux gave U+4E2D.
+    Write-Skip "the appended entry is untestable here: the Windows 10 inbox host breaks the row at its own width (shape $hanShape)"
 } elseif ($hanShape -eq "15") {
     Write-Pass "the appended entry narrowed U+4E2D to one column (shape $hanShape)"
 } else {
