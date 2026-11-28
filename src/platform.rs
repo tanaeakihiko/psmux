@@ -4617,21 +4617,58 @@ pub mod process_info {
 
     /// Get the executable name of a process by PID (e.g. "pwsh" or "vim").
     pub fn get_process_name(pid: u32) -> Option<String> {
+        process_name_by_handle(pid).ok()
+    }
+
+    /// `GetLastError` from `OpenProcess` for a PID that names no process at
+    /// all (ERROR_INVALID_PARAMETER). A PID the caller is merely refused
+    /// reports ERROR_ACCESS_DENIED (5) instead.
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+
+    /// [`get_process_name`] that also says why it failed: `Err` carries
+    /// `GetLastError` when `OpenProcess` itself failed, or 0 when the handle
+    /// opened but the image name could not be read.
+    fn process_name_by_handle(pid: u32) -> Result<String, u32> {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetLastError() -> u32;
+        }
         unsafe {
             let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if h == 0 || h == -1 { return None; }
+            if h == 0 || h == -1 { return Err(GetLastError()); }
             let mut buf = [0u16; 1024];
             let mut size = buf.len() as u32;
             let ok = QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut size);
             CloseHandle(h);
-            if ok == 0 { return None; }
+            if ok == 0 { return Err(0); }
             let full_path = OsString::from_wide(&buf[..size as usize])
                 .to_string_lossy()
                 .into_owned();
-            let name = std::path::Path::new(&full_path)
+            std::path::Path::new(&full_path)
                 .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())?;
-            Some(name)
+                .map(|s| s.to_string_lossy().into_owned())
+                .ok_or(0)
+        }
+    }
+
+    /// The decision half of [`get_process_name_or_snapshot`], with the
+    /// snapshot injected so a test can drive the #650 refusal.
+    ///
+    /// Only "no such process" skips the snapshot. ERROR_INVALID_PARAMETER is
+    /// what `OpenProcess` reports for a PID that is not in the process table,
+    /// and the table has nothing to add for it: the only thing a walk could
+    /// find there afterwards is a new process that reused the PID, which is
+    /// not the one asked about. Every other failure, ERROR_ACCESS_DENIED from
+    /// another Terminal Services session first among them, still asks the
+    /// table, exactly as before.
+    pub(crate) fn name_or_snapshot<S>(by_handle: Result<String, u32>, snapshot: S) -> Option<String>
+    where
+        S: FnOnce() -> Option<String>,
+    {
+        match by_handle {
+            Ok(name) => Some(name),
+            Err(ERROR_INVALID_PARAMETER) => None,
+            Err(_) => snapshot(),
         }
     }
 
@@ -4673,11 +4710,13 @@ pub mod process_info {
     /// teaching them to name a process they cannot open would make psmux MORE
     /// willing to kill, which is exactly the direction the BSOD in the kill
     /// guard's history came from. Only the liveness questions move.
+    ///
+    /// A PID that names no process at all skips the walk (see
+    /// [`name_or_snapshot`]): a crashed server's registry is the common reason
+    /// this is asked, and each walk cost 30 to 45 ms on a busy desktop, paid by
+    /// the next psmux command once per dead registry.
     pub fn get_process_name_or_snapshot(pid: u32) -> Option<String> {
-        if let Some(name) = get_process_name(pid) {
-            return Some(name);
-        }
-        process_name_from_snapshot(pid)
+        name_or_snapshot(process_name_by_handle(pid), || process_name_from_snapshot(pid))
     }
 
     /// Executable name of `pid` from a fresh process-table snapshot, with the
@@ -5257,6 +5296,43 @@ pub mod process_info {
         PinnedTable { prev }
     }
 
+    thread_local! {
+        /// Set while a `pin_on_first_walk` guard is alive: the first
+        /// `Duration::ZERO` walk on this thread is pinned for the rest of it.
+        static PIN_ON_FIRST_WALK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Restores the previous pin and lazy flag when dropped.
+    pub struct LazyPin {
+        prev_flag: bool,
+        prev_table: Option<ProcTable>,
+    }
+
+    impl Drop for LazyPin {
+        fn drop(&mut self) {
+            PIN_ON_FIRST_WALK.with(|f| f.set(self.prev_flag));
+            let prev = self.prev_table.take();
+            PINNED_TABLE.with(|p| *p.borrow_mut() = prev);
+        }
+    }
+
+    /// Like [`pin_fresh`], but the walk is only taken if something on this
+    /// thread actually asks for a fresh table before the guard drops, and then
+    /// only once.
+    ///
+    /// For the startup registry sweep, which runs before every psmux command:
+    /// most registries are answered by their process handle and never need the
+    /// table, so a sweep must not pay a walk up front, but the ones that do
+    /// (a live server in another Terminal Services session, #650) used to pay
+    /// one full walk EACH, 30 to 45 ms apiece on a busy desktop. One sweep is
+    /// a few milliseconds long, the same scale as one Ctrl+C decision, so one
+    /// table answering all of it is as fresh as the question needs.
+    pub fn pin_on_first_walk() -> LazyPin {
+        let prev_flag = PIN_ON_FIRST_WALK.with(|f| f.replace(true));
+        let prev_table = PINNED_TABLE.with(|p| p.borrow().clone());
+        LazyPin { prev_flag, prev_table }
+    }
+
     /// Re-walk the pinned table when it does not know one of `pids`.
     ///
     /// The console membership is enumerated after attaching, i.e. after the
@@ -5305,6 +5381,13 @@ pub mod process_info {
             // answered from the table that decision pinned; see `pin_fresh`.
             if let Some(table) = PINNED_TABLE.with(|p| p.borrow().clone()) {
                 return Some(table);
+            }
+            if PIN_ON_FIRST_WALK.with(|f| f.get()) {
+                let fresh = walk_process_table();
+                if let Some(table) = &fresh {
+                    PINNED_TABLE.with(|p| *p.borrow_mut() = Some(std::sync::Arc::clone(table)));
+                }
+                return fresh;
             }
         }
         if !max_age.is_zero() {
@@ -6017,12 +6100,18 @@ pub mod process_info {
     #[cfg(test)]
     #[path = "../../../tests-rs/test_issue807_wow64_cwd.rs"]
     mod tests_issue807_wow64_cwd;
+
+    #[cfg(test)]
+    #[path = "../../../tests-rs/test_dead_pid_name_lookup.rs"]
+    mod tests_dead_pid_name_lookup;
 }
 
 #[cfg(not(windows))]
 pub mod process_info {
     pub fn get_process_name(_pid: u32) -> Option<String> { None }
     pub fn get_process_name_or_snapshot(_pid: u32) -> Option<String> { None }
+    pub struct LazyPin;
+    pub fn pin_on_first_walk() -> LazyPin { LazyPin }
     pub fn get_process_cwd(_pid: u32) -> Option<String> { None }
     pub fn get_foreground_process_name(_pid: u32) -> Option<String> { None }
     pub fn get_deepest_foreground_process_name(_pid: u32) -> Option<String> { None }

@@ -1572,13 +1572,16 @@ fn run_main_with(argv: Vec<String>, alias_expanded: bool) -> io::Result<()> {
     // render multi-byte Unicode characters instead of mojibake.
     enable_virtual_terminal_processing();
 
-    // Clean up any stale port files at startup
+    // Clean up any stale port files at startup. Both sweeps below share one
+    // process table, walked only if a registry needs it (#650 fallback).
+    let startup_pin = crate::platform::process_info::pin_on_first_walk();
     cleanup_stale_port_files();
     // Then drop registry files whose `.port` entry is already gone (issue
     // #530). The sweep above is the only thing that can reach them, and it
     // finds entries BY their `.port` file — so a satellite that outlives its
     // port is invisible to it and accumulates forever.
     crate::session::prune_orphaned_registry_files();
+    drop(startup_pin);
     // Then reap any LIVE but orphaned server processes (issue #448): duplicates
     // or crashed-client headless servers that cleanup_stale_port_files cannot
     // see because they have no registry file. Bounds the process count so

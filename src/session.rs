@@ -800,6 +800,7 @@ where
     if budget == 0 {
         return 0;
     }
+    let _pin = crate::platform::process_info::pin_on_first_walk();
     let Ok(entries) = std::fs::read_dir(psmux_dir) else {
         return 0;
     };
@@ -2094,6 +2095,9 @@ fn cleanup_stale_port_files_in_with<F>(psmux_dir: &Path, mut probe: F)
 where
     F: FnMut(&str, u16) -> PortProbeResult,
 {
+    // One process table at most for the whole sweep, taken only if some
+    // registry needs it (see pin_on_first_walk).
+    let _pin = crate::platform::process_info::pin_on_first_walk();
     let boot = system_boot_time();
     if let Ok(entries) = std::fs::read_dir(psmux_dir) {
         for entry in entries.flatten() {

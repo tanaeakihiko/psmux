@@ -234,6 +234,34 @@ fn cleanup_with_many_dead_pid_registries_is_fast() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn dead_pid_registries_are_reaped_without_a_process_table_walk() {
+    // A crashed server's PID names no process, so OpenProcess says so
+    // (ERROR_INVALID_PARAMETER) and the #650 snapshot fallback has nothing to
+    // add. It used to walk the whole table once per dead registry, 30 to
+    // 45 ms each, on the next psmux command. Counted, not timed.
+    let walks = || crate::platform::process_info::PROC_TABLE_WALKS.with(|c| c.get());
+    let dir = temp_psmux_dir("pid_anchor_walks");
+    let dead = dead_pid();
+    for i in 0..6 {
+        write_registry(&dir, &format!("dead{i}"), &format!("5431{i}"));
+        fs::write(dir.join(format!("dead{i}.pid")), dead.to_string()).unwrap();
+    }
+    let before = walks();
+    cleanup_stale_port_files_in_with(&dir, |_, _| {
+        panic!("no network probes expected for dead-PID registries");
+    });
+    let walked = walks() - before;
+    for i in 0..6 {
+        assert!(!dir.join(format!("dead{i}.port")).exists(), "dead{i}.port must be reaped");
+    }
+    let _ = fs::remove_dir_all(dir.parent().unwrap());
+    // A PID reused by a new process in between is answered by its handle,
+    // which needs no walk either, so the count is 0 either way.
+    assert_eq!(walked, 0, "6 dead registries took {walked} process table walks");
+}
+
 #[test]
 fn filetime_conversion_is_monotonic_and_anchored() {
     // 1601->1970 offset must be present and ordering preserved.
