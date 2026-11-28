@@ -62,8 +62,14 @@ through the shell named by the `SHELL` environment variable, or PowerShell when
 `display-popup` and floating panes follow it too: a popup command runs through
 `default-shell`, and a popup with no command opens `default-shell`.
 
-With `default-shell` unset nothing changes: commands run exactly as before, and
-a popup command still runs in `pwsh -NoProfile`.
+When `default-shell` is unset, the `SHELL` environment variable takes its place,
+as in tmux (where `default-shell` defaults to `$SHELL`). Pane commands already
+worked this way; popup commands now do as well. Starting psmux from a Git Bash
+tab sets `SHELL` to bash, so there a popup written for PowerShell needs to name
+it: `display-popup -E "pwsh -NoProfile -Command Get-Process"`.
+
+With neither `default-shell` nor `SHELL` set nothing changes: commands run
+exactly as before, and a popup command still runs in `pwsh -NoProfile`.
 
 If you set `default-shell` to bash or cmd, a binding written in PowerShell
 syntax now reaches that shell. Either keep `default-shell pwsh`, or start

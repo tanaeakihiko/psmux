@@ -624,16 +624,29 @@ pub fn popup_frame_wire(app: &AppState, look: &PopupLook) -> (String, String, St
 /// The process a popup (or floating pane) runs. `default_shell` is the
 /// session's `default-shell` with formats expanded; empty when unset.
 ///
-/// tmux runs a popup command as a job through default-shell and opens
-/// default-shell for an empty popup. psmux hardcoded `pwsh -NoProfile
-/// -Command` for a command string and the SHELL/pwsh walk for an empty popup,
-/// whatever default-shell said. With default-shell unset every branch builds
-/// exactly what it did before.
+/// tmux runs a popup command as a job through default-shell, which itself
+/// defaults to $SHELL, and opens default-shell for an empty popup. psmux
+/// hardcoded `pwsh -NoProfile -Command` for a command string and the
+/// SHELL/pwsh walk for an empty popup, whatever default-shell said. A popup
+/// now uses the shell a pane command uses: default-shell, else the SHELL
+/// variable. With neither set every branch builds exactly what it did before.
 pub(crate) fn popup_command_builder(command: &str, default_shell: &str) -> portable_pty::CommandBuilder {
-    let shell = crate::pane::command_shell_for(default_shell);
+    // The SHELL variable, as the pane shell resolves it (cached_shell seeds
+    // from SHELL first and degrades a Store shell where it cannot start).
+    let env_shell = crate::pane::shell_from_env()
+        .and_then(|_| crate::pane::cached_shell().map(str::to_string));
+    popup_command_builder_with(command, default_shell, env_shell)
+}
+
+/// [`popup_command_builder`] with the SHELL variable's shell passed in, so
+/// the rule is testable without the process environment.
+pub(crate) fn popup_command_builder_with(command: &str, default_shell: &str, env_shell: Option<String>) -> portable_pty::CommandBuilder {
+    let configured = crate::pane::command_shell_for(default_shell);
+    let shell = configured.clone().or(env_shell);
     if command.trim().is_empty() {
         // tmux parity (#351): an empty popup is an interactive shell.
-        return if shell.is_some() {
+        // Without default-shell the pane shell already follows SHELL.
+        return if configured.is_some() {
             crate::pane::build_default_shell(default_shell, true, false)
         } else {
             crate::pane::build_command(None, true, false)
@@ -655,19 +668,19 @@ pub(crate) fn popup_command_builder(command: &str, default_shell: &str) -> porta
             stem == "pwsh" || stem == "powershell"
         });
         match (shell.as_deref(), is_powershell) {
-            // A non PowerShell default-shell runs the command the way a
-            // pane command runs through it (`<shell> -c`, cmd `/C`).
+            // A non PowerShell shell runs the command the way a pane
+            // command runs through it (`<shell> -c`, cmd `/S /C`).
             (Some(s), Some(false)) => {
                 return crate::pane::build_command_in(Some(command), Some(s), true, false);
             }
-            // default-shell pwsh/powershell: the same fast, profile free
-            // invocation as before, with the program it names.
+            // pwsh/powershell named by default-shell or SHELL: the same
+            // fast, profile free invocation as before, with that program.
             (Some(s), _) => {
                 let mut builder = portable_pty::CommandBuilder::new(s);
                 builder.args(["-NoProfile", "-Command", command]);
                 return builder;
             }
-            // Unset: exactly today's popup.
+            // Neither default-shell nor SHELL: exactly today's popup.
             (None, _) => {
                 let mut builder = portable_pty::CommandBuilder::new("pwsh");
                 builder.args(["-NoProfile", "-Command", command]);

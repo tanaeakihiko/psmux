@@ -12,12 +12,15 @@
 #   cmd:  PROBE $PSVersionTable.PSVersion Windows_NT $0
 #   bash: PROBE .PSVersion %OS% /usr/bin/bash
 #
-# Cases (SHELL unset in every case):
+# Cases (SHELL unset for A to E):
 #   A  default-shell unset    -E probe          -> pwsh   (unchanged)
 #   B  default-shell cmd      -E probe          -> cmd
 #   C  default-shell Git Bash -E probe          -> bash   (SKIP without Git)
 #   D  default-shell cmd      empty popup       -> cmd.exe is the popup's process
 #   E  default-shell unset    empty popup       -> pwsh is the popup's process
+#   F  SHELL=Git Bash, default-shell unset -E probe -> bash (tmux: default-shell
+#      defaults to $SHELL; same as a pane command)
+#   G  SHELL=Git Bash, default-shell cmd -E probe   -> cmd (default-shell wins)
 #
 # Needs a real client: one attached in a conhost window. Safety: unique -L
 # namespace and PSMUX_DATA_DIR; cleanup with `-L <ns> kill-server` and by
@@ -38,7 +41,7 @@ $work = Join-Path $env:TEMP ('psmux_popsh_' + [Guid]::NewGuid().ToString('N').Su
 New-Item -ItemType Directory -Force $work | Out-Null
 $env:PSMUX_DATA_DIR = Join-Path $work 'data'
 New-Item -ItemType Directory -Force $env:PSMUX_DATA_DIR | Out-Null
-$NS = 'popsh_' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+$NS = ''
 $S = 'ps'
 $started = New-Object System.Collections.Generic.List[int]
 $cmdExe = "$env:SystemRoot\System32\cmd.exe"
@@ -97,11 +100,17 @@ function Test-Empty([string]$label, [string]$wantImage) {
     else { Write-Fail "${label}: the empty popup runs [$($names -join ', ')], want $wantImage" }
 }
 
-try {
+$namespaces = New-Object System.Collections.Generic.List[string]
+# Start a server (SHELL as given, read at server start), attach a client.
+function Start-Server([string]$shellVar) {
+    if ($shellVar) { $env:SHELL = $shellVar } else { [Environment]::SetEnvironmentVariable('SHELL', $null, 'Process') }
+    $script:NS = 'popsh_' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+    $namespaces.Add($script:NS)
     & $PSMUX -L $NS new-session -d -s $S -x 140 -y 40 2>&1 | Out-Null
     for ($i = 0; $i -lt 40; $i++) { & $PSMUX -L $NS has-session -t $S 2>$null; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep -Milliseconds 250 }
-    $script:serverPid = [int](Get-CimInstance Win32_Process -Filter "Name='psmux.exe'" | Where-Object { $_.CommandLine -match "server -s $S -L $NS" } | Select-Object -First 1).ProcessId
-    $con = Start-Process conhost.exe -ArgumentList "`"$PSMUX`" -L $NS attach -t $S" -PassThru
+    $script:serverPid = [int](Get-CimInstance Win32_Process -Filter "Name='psmux.exe'" | Where-Object { $_.CommandLine -match "server -s $S -L $($script:NS)" } | Select-Object -First 1).ProcessId
+    [Environment]::SetEnvironmentVariable('SHELL', $null, 'Process')
+    $con = Start-Process conhost.exe -ArgumentList "`"$PSMUX`" -L $($script:NS) attach -t $S" -PassThru
     $started.Add($con.Id)
     $attached = $false
     for ($i = 0; $i -lt 50; $i++) {
@@ -109,10 +118,14 @@ try {
         if ((& $PSMUX -L $NS display-message -t $S -p '#{session_attached}' 2>&1 | Out-String).Trim() -eq '1') { $attached = $true; break }
     }
     foreach ($c in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($con.Id)" -EA SilentlyContinue)) { $started.Add([int]$c.ProcessId) }
-    if (-not $attached) { Write-Fail 'no client attached'; return }
+    return $attached
+}
 
-    Write-Host "`n=== popup commands follow default-shell ===" -ForegroundColor Cyan
-    Test-Probe 'A default-shell unset' 'pwsh'
+try {
+    if (-not (Start-Server '')) { Write-Fail 'no client attached'; return }
+
+    Write-Host "`n=== popup commands follow default-shell (SHELL unset) ===" -ForegroundColor Cyan
+    Test-Probe 'A SHELL and default-shell unset' 'pwsh'
     & $PSMUX -L $NS set -g default-shell $cmdExe | Out-Null
     Test-Probe 'B default-shell cmd' 'cmd'
     if (Test-Path $bash) {
@@ -128,8 +141,21 @@ try {
     $wantImg = ([IO.Path]::GetFileName($shown)).ToLower()
     if (-not $wantImg.EndsWith('.exe')) { $wantImg += '.exe' }
     Test-Empty "E default-shell unset (shows $shown)" $wantImg
+
+    # tmux's default-shell defaults to $SHELL: with SHELL set and no
+    # default-shell a popup command runs through SHELL, like a pane command.
+    Write-Host "`n=== F: SHELL set, default-shell unset ===" -ForegroundColor Cyan
+    if (Test-Path $bash) {
+        & $PSMUX -L $NS kill-server 2>&1 | Out-Null
+        if (-not (Start-Server $bash)) { Write-Fail 'F: no client attached' }
+        else {
+            Test-Probe 'F SHELL=Git Bash, default-shell unset' 'bash'
+            & $PSMUX -L $NS set -g default-shell $cmdExe | Out-Null
+            Test-Probe 'G SHELL=Git Bash, default-shell cmd wins' 'cmd'
+        }
+    } else { Write-Skip 'F and G: Git Bash not installed' }
 } finally {
-    & $PSMUX -L $NS kill-server 2>&1 | Out-Null
+    foreach ($n in $namespaces) { & $PSMUX -L $n kill-server 2>&1 | Out-Null }
     foreach ($p in $started) { Stop-Process -Id $p -Force -EA SilentlyContinue }
     if ($null -eq $origShell) { [Environment]::SetEnvironmentVariable('SHELL', $null, 'Process') } else { $env:SHELL = $origShell }
     $env:PSMUX_DATA_DIR = $origData
