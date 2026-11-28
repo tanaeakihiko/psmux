@@ -51,6 +51,14 @@ if ($f = Find 'python-*-amd64.exe') {
     Run $f.FullName @('/quiet', 'InstallAllUsers=1', 'PrependPath=1', 'Include_test=0', "TargetDir=$target")
     Note "python in $target" }
 }
+# Visual C++ 2015 to 2022 runtime: nvim and other tools die with
+# STATUS_DLL_NOT_FOUND (0xC0000135) without vcruntime140_1.dll, and a fresh
+# eval image does not have it. Use the full redistributable from
+# aka.ms/vs/17/release/vc_redist.x64.exe; a stripped Package Cache copy fails.
+if ($f = Find 'vc_redist.x64.exe') {
+    Run $f.FullName @('/install', '/quiet', '/norestart')
+    Note "vc runtime $((Get-Item $f.FullName).VersionInfo.ProductVersion)"
+}
 foreach ($msi in 'nvim-win64.msi', 'node-v*-x64.msi', 'Alacritty-*-installer.msi') {
     if ($f = Find $msi) { Run 'msiexec.exe' @('/i', "`"$($f.FullName)`"", '/qn', '/norestart'); Note "installed $($f.Name)" }
 }
