@@ -32,6 +32,8 @@ $script:Passed = 0; $script:Failed = 0; $script:Skipped = 0
 function Write-Pass($m) { Write-Host "  [PASS] $m" -ForegroundColor Green; $script:Passed++ }
 function Write-Fail($m) { Write-Host "  [FAIL] $m" -ForegroundColor Red; $script:Failed++ }
 function Write-Skip($m) { Write-Host "  [SKIP] $m" -ForegroundColor Yellow; $script:Skipped++ }
+# Opt-in step trace (POPSH_TRACE=<file>): shows which call a stalled run is in.
+function T([string]$m) { if ($env:POPSH_TRACE) { Add-Content -Path $env:POPSH_TRACE -Value "$(Get-Date -Format HH:mm:ss.fff) $m" } }
 
 foreach ($v in 'PSMUX_SESSION','PSMUX_SESSION_NAME','PSMUX_PANE','TMUX','TMUX_PANE','PSMUX') { Remove-Item "env:$v" -EA SilentlyContinue }
 $origShell = $env:SHELL
@@ -53,14 +55,16 @@ function Get-ShellOf([string]$t) {
     if ($t -match 'PROBE \S*PSVersion %OS% \S*bash') { return 'bash' }
     return "unknown[$($t.Trim())]"
 }
-function Get-PopupActive { ((& $PSMUX -L $NS dump-state -t $S 2>&1 | Out-String) -match '"popup_active":true') }
+function Get-PopupActive { T 'dump-state'; ((& $PSMUX -L $NS dump-state -t $S 2>&1 | Out-String) -match '"popup_active":true') }
 function Wait-PopupActive([bool]$Want, [int]$Ms = 8000) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     while ($sw.ElapsedMilliseconds -lt $Ms) { if ((Get-PopupActive) -eq $Want) { return $true }; Start-Sleep -Milliseconds 100 }
     return $false
 }
 function Get-Descendants([int]$root) {
+    T 'cim process list'
     $all = @(Get-CimInstance Win32_Process -EA SilentlyContinue)
+    T 'cim done'
     $out = @(); $q = @($root)
     while ($q.Count) {
         $p = $q[0]; $q = @($q | Select-Object -Skip 1)
@@ -72,14 +76,16 @@ function Get-Descendants([int]$root) {
 function Test-Probe([string]$label, [string]$want) {
     $f = Join-Path $work ("probe-" + [Guid]::NewGuid().ToString('N').Substring(0, 6) + '.txt')
     $cmd = "echo PROBE `$PSVersionTable.PSVersion %OS% `$0 > `"$f`""
+    T "probe ${label}: display-popup -E"
     & $PSMUX -L $NS display-popup -t $S -E $cmd 2>&1 | Out-Null
+    T 'probe returned'
     for ($i = 0; $i -lt 60 -and -not (Test-Path $f); $i++) { Start-Sleep -Milliseconds 200 }
     Start-Sleep -Milliseconds 300
     $t = if (Test-Path $f) { Get-Content $f -Raw } else { '' }
     $got = Get-ShellOf $t
     if ($got -eq $want) { Write-Pass "${label}: the popup command ran in $got" }
     else { Write-Fail "${label}: the popup command ran in $got, want $want" }
-    if (-not (Wait-PopupActive $false 3000)) { & $PSMUX -L $NS display-popup -t $S -C 2>&1 | Out-Null }
+    if (-not (Wait-PopupActive $false 3000)) { T 'probe close -C'; & $PSMUX -L $NS display-popup -t $S -C 2>&1 | Out-Null }
 }
 
 function Test-Empty([string]$label, [string]$wantImage) {
@@ -89,12 +95,15 @@ function Test-Empty([string]$label, [string]$wantImage) {
     Start-Sleep -Seconds 4
     $known = @{}
     foreach ($d in Get-Descendants $script:serverPid) { $known[[int]$d.ProcessId] = $true }
+    T "empty ${label}: start display-popup"
     $p = Start-Process -FilePath $PSMUX -ArgumentList "-L $NS display-popup -t $S" -WindowStyle Hidden -PassThru
     $started.Add($p.Id)
     if (-not (Wait-PopupActive $true)) { Write-Fail "${label}: the popup did not open"; return }
     Start-Sleep -Seconds 2
     $names = @(Get-Descendants $script:serverPid | Where-Object { -not $known.ContainsKey([int]$_.ProcessId) } | ForEach-Object { $_.Name.ToLower() })
+    T 'empty close -C'
     & $PSMUX -L $NS display-popup -t $S -C 2>&1 | Out-Null
+    T 'empty close returned'
     [void](Wait-PopupActive $false 3000)
     if ($names -contains $wantImage) { Write-Pass "${label}: the empty popup runs $wantImage" }
     else { Write-Fail "${label}: the empty popup runs [$($names -join ', ')], want $wantImage" }
@@ -136,7 +145,9 @@ try {
     Write-Host "`n=== an empty popup opens default-shell ===" -ForegroundColor Cyan
     & $PSMUX -L $NS set -g default-shell $cmdExe | Out-Null
     Test-Empty 'D default-shell cmd' 'cmd.exe'
+    T 'set -gu default-shell'
     & $PSMUX -L $NS set -gu default-shell | Out-Null
+    T 'show -gv default-shell'
     $shown = (& $PSMUX -L $NS show -gv default-shell 2>&1 | Out-String).Trim()
     $wantImg = ([IO.Path]::GetFileName($shown)).ToLower()
     if (-not $wantImg.EndsWith('.exe')) { $wantImg += '.exe' }
