@@ -49,7 +49,11 @@ fn child_body() {
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn ping");
-    std::thread::sleep(std::time::Duration::from_millis(700));
+    // A fixed wait was not enough: with the rest of the suite starting
+    // processes in parallel, ping sometimes had no console yet after 700 ms
+    // (AttachConsole err=6, "that process exists but has no console"), and
+    // the test failed before it measured anything.
+    wait_until_attachable(victim.id());
 
     let attached = {
         let _g = portable_pty::console_state_lock();
@@ -111,6 +115,26 @@ fn attached_process_survives_ctrl_c_on_the_pane_console() {
     assert_eq!(said, "survived", "the child did not run the attach body");
 }
 
+/// Wait until `pid` has a console this process can attach to, up to 10 s,
+/// and leave this process off any console, as `free_and_attach` expects.
+/// Only the test's setup: the attach it measures comes after, unchanged.
+fn wait_until_attachable(pid: u32) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let ok = unsafe {
+            let _g = portable_pty::console_state_lock();
+            FreeConsole();
+            let ok = AttachConsole(pid) != 0;
+            FreeConsole();
+            ok
+        };
+        if ok || std::time::Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// True if the survival handler is registered: removing one that is not fails.
 /// Puts it back, so the check leaves the list as it found it.
 unsafe fn survival_handler_registered() -> bool {
@@ -155,7 +179,11 @@ fn handler_child_body(marker: std::ffi::OsString) {
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn ping");
-    std::thread::sleep(std::time::Duration::from_millis(700));
+    // A fixed wait was not enough: with the rest of the suite starting
+    // processes in parallel, ping sometimes had no console yet after 700 ms
+    // (AttachConsole err=6, "that process exists but has no console"), and
+    // the test failed before it measured anything.
+    wait_until_attachable(victim.id());
 
     let (attached, after_attach, failed_attach, after_failed_attach) = {
         let _g = portable_pty::console_state_lock();
