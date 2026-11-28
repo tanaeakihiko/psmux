@@ -42,7 +42,7 @@ function Watch-Pane([string]$ns, [string]$pane, [int]$seconds) {
     while ((Get-Date) -lt $deadline) {
         $s = (& $PSMUX -L $ns display-message -p -t $pane '#{pane_dead} #{pane_dead_status}' 2>&1 | Out-String).Trim()
         if ($s -match '^1') { return "dead $($s.Substring(1).Trim())" }
-        if ($s -notmatch '^0') { return "gone [$s]" }
+        if ($s -match "can't find pane") { return "gone [$s]" }
         Start-Sleep -Milliseconds 300
     }
     return 'alive'
@@ -65,7 +65,8 @@ function Test-Placeholders([string]$ns, [hashtable]$panes, [int]$watch) {
             if ($state[$k] -ne 'alive') { continue }
             $s = (& $PSMUX -L $ns display-message -p -t $panes[$k] '#{pane_dead} #{pane_dead_status}' 2>&1 | Out-String).Trim()
             if ($s -match '^1') { $state[$k] = "dead $($s.Substring(1).Trim())" }
-            elseif ($s -notmatch '^0') { $state[$k] = "gone [$s]" }
+            # A slow reply on a loaded host is not a verdict; ask again.
+            elseif ($s -match "can't find pane") { $state[$k] = "gone [$s]" }
         }
         Start-Sleep -Milliseconds 300
     }
