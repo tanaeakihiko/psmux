@@ -84,6 +84,16 @@ function Set-DeadRegistries([string]$Dir, [string]$Ns, [int]$Count) {
         Set-Content "$base.sid" '1' -NoNewline
         Set-Content "$base.pid" (New-DeadPid) -NoNewline
     }
+    if ($Count -gt 0) {
+        # Open every planted file once from another process, untimed. The first
+        # open of a file another process has just written waits for the
+        # antivirus scan of it, 8 to 10 ms a file here, and that would be
+        # charged to psmux. A real dead registry was written when its server
+        # started and has been opened by every psmux command since, so its
+        # scan is long done.
+        cmd /c "type `"$Dir\${Ns}__dead*`" >nul 2>nul"
+        Start-Sleep -Milliseconds 200
+    }
 }
 
 function Wait-Prompt([string]$Exe, [string]$Ns, [string]$Session, [Diagnostics.Stopwatch]$Sw, [int]$TimeoutMs = 20000) {
