@@ -51,13 +51,20 @@ $REVERSE = 0x4000
 $OVERLINE = 0x0400
 $INTENSITY = 0x0008
 
-# The console host of Windows 10 (build 19045) keeps no overline: it stores
-# SGR 53 with no COMMON_LVB_GRID_HORIZONTAL (measured there; its pseudo
-# console drops 53 as well), so there an overline the client wrote reads
-# back as none. The window that hosts the client is that inbox host whatever
-# PSMUX_CONPTY_DIR says, which moves only the panes.
-$NoOverline = [Environment]::OSVersion.Version.Build -lt 22000
-function Want-Overline([string]$bits) { if ($NoOverline) { '0' * $bits.Length } else { $bits } }
+# Some console hosts keep no overline: the inbox host of Windows 10 build
+# 19045.6466 stores SGR 53 with no COMMON_LVB_GRID_HORIZONTAL, while 19045.7807
+# keeps it, so the build number cannot tell. The window that hosts the client
+# is the inbox host whatever PSMUX_CONPTY_DIR says, which moves only the
+# panes. So the suite asks the host: a console of its own writes SGR 53 and
+# the cells are read back. Where the host keeps no overline the overline
+# checks cannot see what psmux drew, and they are reported as skipped.
+$script:TestsSkipped = 0
+function Write-Skip($msg) { Write-Host "  [SKIP] $msg" -ForegroundColor Yellow; $script:TestsSkipped++ }
+$script:NoOverline = $false
+function Check-Overline($name, $got, $want) {
+    if ($script:NoOverline) { Write-Skip "${name}: this console host keeps no overline, so psmux's cannot be read back" }
+    else { Check $name $got $want }
+}
 
 $TempHome = Join-Path ([System.IO.Path]::GetTempPath()) ("psmux_ssa_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force $TempHome | Out-Null
@@ -91,12 +98,34 @@ function Status-Row([string[]]$config, [string]$marker, [string[]]$after = @()) 
     Start-Sleep -Milliseconds 600
     P kill-server | Out-Null
     Start-Sleep -Milliseconds 400
+    return (Parse-Row $lines $marker)
+}
+
+# The conread -a line holding $marker as @{ Text; Attrs }, or $null.
+function Parse-Row([string[]]$lines, [string]$marker) {
     $line = $lines | Where-Object { $_ -match [regex]::Escape($marker) } | Select-Object -Last 1
     if (-not $line) { return $null }
     $m = [regex]::Match($line, '^\[attr ([^\]]+)\] (.*)$')
     $attrs = @()
     foreach ($part in $m.Groups[1].Value.Split(',')) { $v, $n = $part.Split('x'); $attrs += @([int]$v) * [int]$n }
     return @{ Text = $m.Groups[2].Value; Attrs = $attrs }
+}
+
+# Whether a console window of this host keeps SGR 53: $true, $false, or $null
+# when the probe's cells could not be read.
+function Test-HostOverline {
+    $probe = Join-Path $toolDir "overline_probe.ps1"
+    Set-Content -Path $probe -Value '[Console]::Out.Write([char]27 + "[53mOVLPROBE" + [char]27 + "[0m"); Start-Sleep 30'
+    $p = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList "-NoProfile", "-NoLogo", "-File", $probe -PassThru
+    $row = $null
+    try {
+        for ($i = 0; $i -lt 20 -and -not $row; $i++) {
+            Start-Sleep -Milliseconds 300
+            $row = Parse-Row ([string[]](& $READ $p.Id -a)) 'OVLPROBE'
+        }
+    } finally { Stop-Process -Id $p.Id -Force -EA SilentlyContinue }
+    if (-not $row) { return $null }
+    return (Bits $row 'OVLPROBE' $OVERLINE) -eq '11111111'
 }
 
 # '1' or '0' per character of $text in $row, for the attribute bit $mask.
@@ -115,6 +144,10 @@ Write-Host "  $((& $PSMUX -V) -join ' ')"
 
 try {
     if (-not (Test-Path $READ)) { Write-Fail "conread did not compile"; throw "no conread" }
+    $kept = Test-HostOverline
+    if ($null -eq $kept) { Write-Host "  [INFO] the overline probe could not be read; the overline checks run" }
+    elseif (-not $kept) { $script:NoOverline = $true; Write-Host "  [INFO] this console host keeps no SGR 53 of its own program either" }
+    else { Write-Host "  [INFO] this console host keeps SGR 53" }
 
     Write-Host "`n[1] #[overline] and #[nooverline] in status-left" -ForegroundColor Yellow
     $row = Status-Row @(
@@ -123,7 +156,7 @@ try {
         "set -g status-right ''"
     ) 'LOP'
     if ($null -eq $row) { Write-Fail "no status row with LOP" }
-    else { Check "overline of L, O, P" (Bits $row 'LOP' $OVERLINE) (Want-Overline '010') }
+    else { Check-Overline "overline of L, O, P" (Bits $row 'LOP' $OVERLINE) '010' }
 
     Write-Host "`n[2] status-style overline, and nooverline after it" -ForegroundColor Yellow
     $row = Status-Row @(
@@ -132,7 +165,7 @@ try {
         "set -g status-right ''"
     ) 'ABC'
     if ($null -eq $row) { Write-Fail "no status row with ABC" }
-    else { Check "overline of A, B, C" (Bits $row 'ABC' $OVERLINE) (Want-Overline '110') }
+    else { Check-Overline "overline of A, B, C" (Bits $row 'ABC' $OVERLINE) '110' }
 
     Write-Host "`n[3] status-style reverse reaches status-left, the window list and the rest of the line" -ForegroundColor Yellow
     $row = Status-Row (@("set -g status-style 'bg=green,reverse'") + $common) 'QQQ'
@@ -147,8 +180,8 @@ try {
     $row = Status-Row (@("set -g status-style 'bg=green,overline'", "set -g window-status-current-style reverse") + $common) 'QQQ'
     if ($null -eq $row) { Write-Fail "no status row with QQQ" }
     else {
-        Check "overline of QQQ" (Bits $row 'QQQ' $OVERLINE) (Want-Overline '111')
-        Check "overline of WWW" (Bits $row 'WWW' $OVERLINE) (Want-Overline '111')
+        Check-Overline "overline of QQQ" (Bits $row 'QQQ' $OVERLINE) '111'
+        Check-Overline "overline of WWW" (Bits $row 'WWW' $OVERLINE) '111'
         Check "reverse of QQQ" (Bits $row 'QQQ' $REVERSE) '000'
         Check "reverse of WWW" (Bits $row 'WWW' $REVERSE) '111'
     }
@@ -192,9 +225,9 @@ try {
     if ($null -eq $row) { Write-Fail "no status row with QQQ" }
     else {
         Check "reverse of QQQ" (Bits $row 'QQQ' $REVERSE) '111'
-        Check "overline of QQQ" (Bits $row 'QQQ' $OVERLINE) (Want-Overline '111')
+        Check-Overline "overline of QQQ" (Bits $row 'QQQ' $OVERLINE) '111'
         Check "reverse of WWW" (Bits $row 'WWW' $REVERSE) '000'
-        Check "overline of WWW" (Bits $row 'WWW' $OVERLINE) (Want-Overline '000')
+        Check-Overline "overline of WWW" (Bits $row 'WWW' $OVERLINE) '000'
     }
 }
 catch {
@@ -206,5 +239,5 @@ finally {
     Remove-Item -Recurse -Force $TempHome -EA SilentlyContinue
 }
 
-Write-Host "`n=== Results: $($script:TestsPassed) passed, $($script:TestsFailed) failed ===" -ForegroundColor Cyan
+Write-Host "`n=== Results: $($script:TestsPassed) passed, $($script:TestsFailed) failed, $($script:TestsSkipped) skipped ===" -ForegroundColor Cyan
 exit $script:TestsFailed

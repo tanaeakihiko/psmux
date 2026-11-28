@@ -324,8 +324,9 @@ as `ESC[K` in the default colours when it repaints, which it does when the pane 
 background colour on trailing blanks is lost then. The OpenConsole named by `PSMUX_CONPTY_DIR`
 (1.25.2609.30003) passes every one of these unchanged, as the inbox host of Windows 11 does.
 
-A psmux client attached in a console window on that build draws through the same host, so its
-status line shows no overline either.
+A psmux client attached in a console window on that build draws through the same host. Some
+updates of 19045 keep no overline in a console window either (19045.6466 drops it, 19045.7807
+keeps it), and there the status line shows none.
 
 #### Sixel images need this host
 
