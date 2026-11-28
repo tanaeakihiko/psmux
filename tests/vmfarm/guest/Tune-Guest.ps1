@@ -18,6 +18,23 @@ foreach ($svc in 'WSearch', 'SysMain') {
     Stop-Service $svc -Force -ErrorAction SilentlyContinue
     Set-Service $svc -StartupType Disabled -ErrorAction SilentlyContinue
 }
+# Windows 11 restarts Windows Update through WaaSMedic even with the service
+# disabled, and Store app updates run beside it (measured after smoke run 3:
+# wuauserv, DoSvc, InstallService and AppXSvc held 3 of 4 vCPUs on an idle
+# shard). Point WU at a dead local server and stop Store auto updates.
+$wu = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+New-Item "$wu\AU" -Force | Out-Null
+Set-ItemProperty $wu -Name WUServer -Value 'http://127.0.0.1:9'
+Set-ItemProperty $wu -Name WUStatusServer -Value 'http://127.0.0.1:9'
+Set-ItemProperty $wu -Name DoNotConnectToWindowsUpdateInternetLocations -Value 1 -Type DWord
+Set-ItemProperty "$wu\AU" -Name UseWUServer -Value 1 -Type DWord
+Set-ItemProperty "$wu\AU" -Name NoAutoUpdate -Value 1 -Type DWord
+New-Item 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore' -Force | Out-Null
+Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore' -Name AutoDownload -Value 2 -Type DWord
+New-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' -Force | Out-Null
+Set-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' -Name DODownloadMode -Value 99 -Type DWord
+foreach ($svc in 'wuauserv', 'UsoSvc', 'DoSvc') { Stop-Service $svc -Force -ErrorAction SilentlyContinue }
+
 # Finish the pending .NET Framework native image work now instead of mid sweep.
 foreach ($ngen in "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\ngen.exe", "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\ngen.exe") {
     if (Test-Path $ngen) { & $ngen executeQueuedItems /nologo | Out-Null }

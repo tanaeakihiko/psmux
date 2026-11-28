@@ -41,6 +41,7 @@ param(
     [int]$StallMinutes = 20,
     [int]$PollSeconds = 30,
     [string]$RunId = (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'),
+    [switch]$KeepNetwork,              # leave the guests' NIC connected (default: unplugged for the run)
     [switch]$ListHostOnly,
     [switch]$PlanOnly
 )
@@ -99,6 +100,9 @@ foreach ($vm in $VMNames) {
 $VMNames | ForEach-Object -Parallel {
     Restore-VMSnapshot -VMName $_ -Name 'clean' -Confirm:$false
     if ((Get-VM -Name $_).State -ne 'Running') { Start-VM -Name $_ }
+    # No network during the run: nothing in the guest can start downloading
+    # updates, and the suites only use loopback. PowerShell Direct needs none.
+    if (-not $using:KeepNetwork) { Get-VMNetworkAdapter -VMName $_ | Disconnect-VMNetworkAdapter }
 } -ThrottleLimit $ShardCount
 Say "checkpoints restored, VMs running"
 
