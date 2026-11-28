@@ -199,8 +199,13 @@ fn each_emoji_sequence_is_one_two_cell_character() {
 #[test]
 fn right_crosses_each_emoji_sequence_in_one_step() {
     let mut app = lines_app();
-    // tmux 3.7c: 0 -> 2 -> 4 -> 6 -> 8 -> 10 -> 11.
-    assert_eq!(walk(&mut app, 1, 0, 1, 6), vec![2, 4, 6, 8, 10, 11]);
+    // tmux 3.8: 0 -> 2 -> 4 -> 6 -> 8 -> 10, the `a`, which is the last
+    // character, so vi keys go on from there to the next line
+    // (grid_reader_cursor_right stops at grid_line_limit). tmux 3.7c went to
+    // 11 first.
+    assert_eq!(walk(&mut app, 1, 0, 1, 5), vec![2, 4, 6, 8, 10]);
+    move_copy_cursor(&mut app, 1, 0);
+    assert_eq!(app.copy_pos, Some((2, 0)));
 }
 
 #[test]
@@ -222,8 +227,12 @@ fn a_wide_character_in_the_last_two_columns_stops_right_on_its_first_cell() {
     let line = format!("{}\u{65e5}", "x".repeat(COLS as usize - 2));
     let mut app = copy_app(&format!("{line}\r\n"));
     let first = COLS - 2;
-    // Its second cell is the last column, so there is nothing to step to.
-    assert_eq!(walk(&mut app, 0, first - 1, 1, 3), vec![first, first, first]);
+    // Its second cell is the last column: the cursor stops on its first cell,
+    // the last character, and the next step goes on to the next line, as in
+    // tmux 3.8.
+    assert_eq!(walk(&mut app, 0, first - 1, 1, 1), vec![first]);
+    move_copy_cursor(&mut app, 1, 0);
+    assert_eq!(app.copy_pos, Some((1, 0)));
     assert_eq!(walk(&mut app, 0, first, -1, 1), vec![first - 1]);
 }
 

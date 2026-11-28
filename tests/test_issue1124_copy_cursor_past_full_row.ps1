@@ -156,6 +156,57 @@ try {
     P send-keys -t $S C-e | Out-Null
     $got = Pos
     Check ($got -eq '20,0') "emacs C-e lands on 20,0 (tmux)" "landed on $got"
+
+    # tmux holds every cursor move inside window_copy_cursor_limit
+    # (window_copy_update_cursor), up and down remember the column a run of
+    # them started from and whether it was at the end of its line (lastcx,
+    # lastsx), and cursor-right and cursor-left go on to the next and the
+    # previous line. psmux kept the column through up, down and the page
+    # moves, left history-bottom where it was, and stopped right and left at
+    # the pane edge. Each case starts at end-of-line on its row; the values
+    # are what tmux 3.8 reports on the same rows, with the status line off so
+    # the pane is 8 rows as tmux's was.
+    Write-Head "G. up, down, page and wrapping moves from the end of a row"
+    P set -g status off | Out-Null
+    Start-Sleep -Milliseconds 300
+    $MOVES = @(
+        @(0, 'cursor-down', '20,1', '19,1'),
+        @(0, 'cursor-down cursor-down', '5,2', '4,2'),
+        @(0, 'cursor-down cursor-down cursor-down', '20,3', '4,3'),
+        @(3, 'cursor-down', '0,4', '0,4'),
+        @(1, 'cursor-up', '0,0', '19,0'),
+        @(2, 'cursor-down cursor-up', '0,2', '4,2'),
+        @(0, 'halfpage-down', '0,4', '0,4'),
+        @(0, 'page-down', '0,6', '0,6'),
+        @(3, 'halfpage-up', '0,0', '18,0'),
+        @(0, 'history-bottom', '0,7', '0,7'),
+        @(0, 'cursor-right', '0,1', '0,1'),
+        @(2, 'cursor-right', '0,3', '0,3'),
+        @(3, 'cursor-right', '0,4', '0,4'),
+        @(0, 'cursor-right cursor-right', '1,1', '1,1'),
+        @(7, 'cursor-right', '0,7', '0,7'),
+        @(3, 'start-of-line cursor-left', '5,2', '4,2'),
+        @(4, 'start-of-line cursor-left', '20,3', '18,3'),
+        @(0, 'start-of-line cursor-left', '0,0', '0,0'),
+        @(0, 'begin-selection cursor-down cursor-down', '5,2', '4,2'),
+        @(0, 'rectangle-toggle begin-selection cursor-down cursor-down', '20,2', '19,2'),
+        @(0, 'begin-selection rectangle-toggle cursor-right cursor-right', '1,1', '0,1')
+    )
+    foreach ($mk in 'emacs', 'vi') {
+        P set -g mode-keys $mk | Out-Null
+        foreach ($m in $MOVES) {
+            $want = if ($mk -eq 'emacs') { $m[2] } else { $m[3] }
+            P send-keys -t $S -X cancel | Out-Null
+            P copy-mode -t $S | Out-Null
+            P send-keys -t $S -X top-line | Out-Null
+            for ($i = 0; $i -lt $m[0]; $i++) { P send-keys -t $S -X cursor-down | Out-Null }
+            P send-keys -t $S -X start-of-line | Out-Null
+            P send-keys -t $S -X end-of-line | Out-Null
+            foreach ($c in ($m[1] -split ' ')) { P send-keys -t $S -X $c | Out-Null }
+            $got = Pos
+            Check ($got -eq $want) "$mk, row $($m[0]): $($m[1]) lands on $want (tmux)" "$mk, row $($m[0]): $($m[1]) landed on $got, tmux lands on $want"
+        }
+    }
 } finally {
     P kill-server | Out-Null
     if ($null -ne $savedClipboard) { try { Set-Clipboard -Value $savedClipboard } catch {} }

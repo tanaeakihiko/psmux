@@ -324,11 +324,10 @@ fn left_from_one_past_a_full_row_is_its_last_column() {
     eol_from(&mut app, 0, 0);
     move_copy_cursor(&mut app, -1, 0);
     assert_eq!(app.copy_pos, Some((0, COLS - 1)));
-    // Right does not move it back inside the row. (tmux goes on to the next
-    // line, which psmux's cursor-right does from no column.)
+    // Right goes on to the start of the next line, as tmux's does.
     eol_from(&mut app, 0, 0);
     move_copy_cursor(&mut app, 1, 0);
-    assert_eq!(app.copy_pos, Some((0, COLS)));
+    assert_eq!(app.copy_pos, Some((1, 0)));
 }
 
 #[test]
@@ -352,4 +351,202 @@ fn an_emacs_selection_to_the_end_of_a_full_row_copies_all_of_it() {
     let mode = crate::types::SelectionMode::Char;
     let text = selection_text(&mut parser, ROWS, COLS, (0, 0), (0, end), mode, true, 0);
     assert_eq!(text, "a".repeat(COLS as usize));
+}
+
+// Every copy cursor move is held inside window_copy_cursor_limit in tmux
+// (window_copy_update_cursor), and up and down remember the column a run of
+// vertical moves started from and whether it was at the end of its line
+// (lastcx, lastsx). psmux kept the column through up, down and the page
+// moves whatever the new line held, did not limit history-bottom, and its
+// cursor-right and cursor-left stopped at the pane edge instead of going on
+// to the next or previous line. Each case below starts as the E2E suite
+// does (top-line, cursor-down to the row, start-of-line, end-of-line), runs
+// the moves, and expects the position tmux 3.8 reports for the same rows on
+// a 20 by 8 pane with status off: row 0 full of 'a', row 1 "one two " and
+// twelve 'z', row 2 "short", row 3 eighteen 'a' and a wide character, each
+// ended with CR LF.
+
+const MOVES: &[(&str, u16, &str, (u16, u16))] = &[
+    ("emacs", 0, "cursor-down", (1, 20)),
+    ("emacs", 0, "cursor-down cursor-down", (2, 5)),
+    ("emacs", 0, "cursor-down cursor-down cursor-down", (3, 20)),
+    ("emacs", 0, "cursor-down cursor-down cursor-down cursor-down", (4, 0)),
+    ("emacs", 3, "cursor-down", (4, 0)),
+    ("emacs", 1, "cursor-up", (0, 0)),
+    ("emacs", 2, "cursor-up", (1, 0)),
+    ("emacs", 4, "cursor-up", (3, 0)),
+    ("emacs", 0, "halfpage-down", (4, 0)),
+    ("emacs", 0, "page-down", (6, 0)),
+    ("emacs", 3, "halfpage-up", (0, 0)),
+    ("emacs", 0, "cursor-right", (1, 0)),
+    ("emacs", 3, "cursor-right", (4, 0)),
+    ("emacs", 2, "cursor-right", (3, 0)),
+    ("emacs", 0, "cursor-right cursor-right", (1, 1)),
+    ("emacs", 0, "history-bottom", (7, 0)),
+    ("emacs", 0, "cursor-left cursor-down cursor-down cursor-down", (3, 19)),
+    ("emacs", 2, "cursor-up cursor-up", (0, 0)),
+    ("emacs", 0, "begin-selection cursor-down cursor-down", (2, 5)),
+    ("emacs", 0, "rectangle-toggle begin-selection cursor-down cursor-down", (2, 20)),
+    ("emacs", 1, "start-of-line cursor-left", (0, 20)),
+    ("emacs", 3, "start-of-line cursor-left", (2, 5)),
+    ("emacs", 4, "start-of-line cursor-left", (3, 20)),
+    ("emacs", 0, "start-of-line cursor-left", (0, 0)),
+    ("emacs", 3, "cursor-left cursor-left cursor-right", (3, 18)),
+    ("emacs", 3, "cursor-left cursor-right", (3, 20)),
+    ("emacs", 7, "cursor-right", (7, 0)),
+    ("emacs", 6, "cursor-down", (7, 0)),
+    ("emacs", 0, "cursor-down cursor-up", (0, 20)),
+    ("emacs", 2, "cursor-down cursor-up", (2, 0)),
+    ("emacs", 0, "cursor-left cursor-left cursor-down cursor-down cursor-down cursor-up", (2, 5)),
+    ("emacs", 0, "halfpage-down halfpage-up", (0, 20)),
+    ("emacs", 0, "scroll-down", (0, 20)),
+    ("emacs", 0, "rectangle-toggle cursor-down cursor-down", (2, 5)),
+    ("emacs", 0, "rectangle-toggle cursor-right", (1, 0)),
+    ("emacs", 0, "begin-selection rectangle-toggle cursor-right cursor-right", (1, 1)),
+    ("vi", 0, "cursor-down", (1, 19)),
+    ("vi", 0, "cursor-down cursor-down", (2, 4)),
+    ("vi", 0, "cursor-down cursor-down cursor-down", (3, 4)),
+    ("vi", 0, "cursor-down cursor-down cursor-down cursor-down", (4, 0)),
+    ("vi", 3, "cursor-down", (4, 0)),
+    ("vi", 1, "cursor-up", (0, 19)),
+    ("vi", 2, "cursor-up", (1, 4)),
+    ("vi", 4, "cursor-up", (3, 0)),
+    ("vi", 0, "halfpage-down", (4, 0)),
+    ("vi", 0, "page-down", (6, 0)),
+    ("vi", 3, "halfpage-up", (0, 18)),
+    ("vi", 0, "cursor-right", (1, 0)),
+    ("vi", 3, "cursor-right", (4, 0)),
+    ("vi", 2, "cursor-right", (3, 0)),
+    ("vi", 0, "cursor-right cursor-right", (1, 1)),
+    ("vi", 0, "history-bottom", (7, 0)),
+    ("vi", 0, "cursor-left cursor-down cursor-down cursor-down", (3, 4)),
+    ("vi", 2, "cursor-up cursor-up", (0, 4)),
+    ("vi", 0, "begin-selection cursor-down cursor-down", (2, 4)),
+    ("vi", 0, "rectangle-toggle begin-selection cursor-down cursor-down", (2, 19)),
+    ("vi", 1, "start-of-line cursor-left", (0, 19)),
+    ("vi", 3, "start-of-line cursor-left", (2, 4)),
+    ("vi", 4, "start-of-line cursor-left", (3, 18)),
+    ("vi", 0, "start-of-line cursor-left", (0, 0)),
+    ("vi", 3, "cursor-left cursor-left cursor-right", (3, 17)),
+    ("vi", 3, "cursor-left cursor-right", (3, 18)),
+    ("vi", 7, "cursor-right", (7, 0)),
+    ("vi", 6, "cursor-down", (7, 0)),
+    ("vi", 0, "cursor-down cursor-up", (0, 19)),
+    ("vi", 2, "cursor-down cursor-up", (2, 4)),
+    ("vi", 0, "cursor-left cursor-left cursor-down cursor-down cursor-down cursor-up", (2, 4)),
+    ("vi", 0, "halfpage-down halfpage-up", (0, 19)),
+    ("vi", 0, "scroll-down", (0, 19)),
+    ("vi", 0, "rectangle-toggle cursor-down cursor-down", (2, 5)),
+    ("vi", 0, "rectangle-toggle cursor-right", (1, 0)),
+    ("vi", 0, "begin-selection rectangle-toggle cursor-right cursor-right", (1, 0)),
+];
+
+fn small_rows_app(keys: &str) -> AppState {
+    let mut app = AppState::new("copy_moves".to_string());
+    app.window_base_index = 0;
+    app.pane_base_index = 0;
+    app.mode_keys = keys.to_string();
+    let pane = make_pane(0, 8, 20);
+    pane.term.lock().expect("parser lock").process(
+        format!("{}\r\none two {}\r\nshort\r\n{}\u{4e16}\r\n", "a".repeat(20), "z".repeat(12), "a".repeat(18)).as_bytes(),
+    );
+    let mut win = make_window(0);
+    win.root = Node::Leaf(pane);
+    app.windows.push(win);
+    app.active_idx = 0;
+    app.last_window_area = ratatui::layout::Rect::new(0, 0, 20, 8);
+    enter_copy_mode(&mut app);
+    app
+}
+
+fn run_move(app: &mut AppState, cmd: &str) {
+    match cmd {
+        "cursor-up" => move_copy_cursor(app, 0, -1),
+        "cursor-down" => move_copy_cursor(app, 0, 1),
+        "cursor-left" => move_copy_cursor(app, -1, 0),
+        "cursor-right" => move_copy_cursor(app, 1, 0),
+        "start-of-line" => move_to_line_start(app),
+        "end-of-line" => move_to_line_end(app),
+        "halfpage-up" => page_scroll(app, true, true),
+        "halfpage-down" => page_scroll(app, false, true),
+        "page-down" => page_scroll(app, false, false),
+        "scroll-down" => scroll_copy_down(app, 1),
+        "history-bottom" => scroll_to_bottom(app),
+        "begin-selection" => begin_selection(app),
+        "rectangle-toggle" => toggle_rectangle(app),
+        other => panic!("no move {other}"),
+    }
+}
+
+#[test]
+fn every_move_lands_where_tmux_puts_it() {
+    let mut wrong = Vec::new();
+    for &(keys, row, cmds, want) in MOVES {
+        let mut app = small_rows_app(keys);
+        move_to_screen_top(&mut app);
+        for _ in 0..row { run_move(&mut app, "cursor-down"); }
+        run_move(&mut app, "start-of-line");
+        run_move(&mut app, "end-of-line");
+        for c in cmds.split(' ') { run_move(&mut app, c); }
+        let got = app.copy_pos.expect("copy_pos");
+        if got != want {
+            wrong.push(format!("{keys} row {row} [{cmds}]: got x={} y={}, tmux x={} y={}", got.1, got.0, want.1, want.0));
+        }
+    }
+    assert!(wrong.is_empty(), "{} of {} moves differ from tmux 3.8:\n{}", wrong.len(), MOVES.len(), wrong.join("\n"));
+}
+
+// scroll-up and scroll-down (the wheel runs them too), tmux's
+// window_copy_cmd_scroll_up and _down: with a selection only the view moves,
+// at either end of the history nothing changes, and otherwise each step is a
+// vertical move in scroll_only mode, with the column settled as for cursor-up
+// and cursor-down. The pane is 80 by 24 with 200
+// numbered lines and "ab"; each case enters copy mode, runs cursor-up five
+// times, then the moves, and expects tmux 3.8's copy_cursor_x,
+// copy_cursor_y and scroll_position.
+const SCROLLS: &[(&str, &str, (u16, u16, usize))] = &[
+    ("vi", "begin-selection scroll-up scroll-up scroll-up", (1, 18, 3)),
+    ("vi", "scroll-down", (1, 18, 0)),
+    ("emacs", "scroll-up scroll-up scroll-up", (7, 18, 3)),
+    ("emacs", "scroll-up scroll-up scroll-up scroll-up scroll-up scroll-up scroll-up scroll-up scroll-up scroll-up", (7, 18, 10)),
+    ("emacs", "begin-selection scroll-up scroll-up scroll-up", (7, 18, 3)),
+    ("emacs", "scroll-up scroll-up scroll-down", (7, 18, 1)),
+    ("emacs", "scroll-down", (7, 18, 0)),
+    ("emacs", "cursor-up cursor-up scroll-up scroll-down", (7, 16, 0)),
+];
+
+#[test]
+fn scroll_up_and_down_move_the_cursor_as_tmux_does() {
+    let mut wrong = Vec::new();
+    for &(keys, cmds, want) in SCROLLS {
+        let mut app = AppState::new("copy_scrolls".to_string());
+        app.window_base_index = 0;
+        app.pane_base_index = 0;
+        app.mode_keys = keys.to_string();
+        let pane = make_pane(0, 24, 80);
+        {
+            let mut parser = pane.term.lock().expect("parser lock");
+            for i in 1..=200 { parser.process(format!("LINE{i:03}\r\n").as_bytes()); }
+            parser.process(b"ab\r\n");
+        }
+        let mut win = make_window(0);
+        win.root = Node::Leaf(pane);
+        app.windows.push(win);
+        app.active_idx = 0;
+        app.last_window_area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        enter_copy_mode(&mut app);
+        for _ in 0..5 { run_move(&mut app, "cursor-up"); }
+        for c in cmds.split(' ') {
+            match c {
+                "scroll-up" => scroll_copy_up(&mut app, 1),
+                other => run_move(&mut app, other),
+            }
+        }
+        let (r, c) = app.copy_pos.expect("copy_pos");
+        let got = (c, r, app.copy_scroll_offset);
+        if got != want {
+            wrong.push(format!("{keys} [{cmds}]: got {got:?}, tmux {want:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{} of {} differ from tmux 3.8:\n{}", wrong.len(), SCROLLS.len(), wrong.join("\n"));
 }

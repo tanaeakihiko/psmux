@@ -164,10 +164,18 @@ try {
         Check ($buf -eq 'trail') "on 'trail   ' the copy stops at 'trail' (tmux)" "buffer [$buf]"
         Enter-Row 1
         P send-keys -t $S -X begin-selection | Out-Null
+        # cursor-right stops at the end of the text and then goes on to the
+        # next line (grid_reader_cursor_right), so seven steps from 0,1 reach
+        # row 3 over the empty row 2: 1,3 with vi keys, 0,3 with emacs keys.
+        # Compared as bytes, since show-buffer's lines drop the last newline.
         P send-keys -t $S -X -N 7 cursor-right | Out-Null
         P send-keys -t $S -X copy-selection-and-cancel | Out-Null
-        $buf = ((P show-buffer) -join "`n")
-        Check ($buf -eq 'trail') "a selection walked past the text of 'trail   ' copies 'trail' (tmux)" "buffer [$buf]"
+        $bf = Join-Path $TMP "walked.txt"
+        Remove-Item $bf -EA SilentlyContinue
+        P save-buffer $bf | Out-Null
+        $buf = if (Test-Path $bf) { [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($bf)) } else { '' }
+        $wantWalk = if ($mk -eq 'vi') { "trail`n`n  " } else { "trail`n`n" }
+        Check ($buf -eq $wantWalk) "a selection walked right past the text of 'trail   ' goes on over the next lines as tmux's does" "buffer [$($buf.Replace("`n", '<LF>'))], tmux [$($wantWalk.Replace("`n", '<LF>'))]"
         Enter-Row 0
         P send-keys -t $S -X begin-selection | Out-Null
         P send-keys -t $S -X cursor-down | Out-Null

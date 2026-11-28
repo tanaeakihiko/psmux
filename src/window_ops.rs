@@ -1624,10 +1624,10 @@ pub fn remote_mouse_drag(app: &mut AppState, x: u16, y: u16) {
             // row scrolls the view so the selection continues into scrollback.
             if y <= area.y {
                 app.copy_mouse_down_cell = None;
-                scroll_copy_up(app, 1);
+                crate::copy_mode::scroll_copy_view(app, 1, true);
             } else if y + 1 >= area.y + area.height {
                 app.copy_mouse_down_cell = None;
-                scroll_copy_down(app, 1);
+                crate::copy_mode::scroll_copy_view(app, 1, false);
             }
         }
         return;
@@ -2134,10 +2134,10 @@ pub fn handle_pane_mouse(app: &mut AppState, pane_id: usize, button: u8, col: i1
             // discard the selection.
             if row <= 0 {
                 app.copy_mouse_down_cell = None;
-                scroll_copy_up(app, 1 + ((-row) as usize / 2).min(4));
+                crate::copy_mode::scroll_copy_view(app, 1 + ((-row) as usize / 2).min(4), true);
             } else if row >= max_r {
                 app.copy_mouse_down_cell = None;
-                scroll_copy_down(app, 1 + ((row - max_r) as usize / 2).min(4));
+                crate::copy_mode::scroll_copy_view(app, 1 + ((row - max_r) as usize / 2).min(4), false);
             }
         } else if button == 0 && !press && app.click_finish_at.is_some() {
             // The release of a built-in double / triple click: the selection
@@ -2326,9 +2326,9 @@ pub fn copy_drag_begin(app: &mut AppState, pane_id: usize, anchor_col: i16, anch
     // immediately so the selection keeps growing (the bottom edge only
     // moves when the view was scrolled back; at offset 0 it is a no-op).
     if row <= 0 {
-        scroll_copy_up(app, 1 + ((-row) as usize / 2).min(4));
+        crate::copy_mode::scroll_copy_view(app, 1 + ((-row) as usize / 2).min(4), true);
     } else if row >= max_r {
-        scroll_copy_down(app, 1 + ((row - max_r) as usize / 2).min(4));
+        crate::copy_mode::scroll_copy_view(app, 1 + ((row - max_r) as usize / 2).min(4), false);
     }
 }
 

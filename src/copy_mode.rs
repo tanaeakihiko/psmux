@@ -66,6 +66,7 @@ pub fn enter_copy_mode(app: &mut AppState) {
     app.copy_count = None;
     app.copy_mark = None;
     app.copy_last_jump = None;
+    app.copy_last_col = (0, 0);
     app.copy_refresh_live = false;
     app.copy_refresh_version = 0;
     app.copy_search_marks = false;
@@ -295,6 +296,7 @@ fn live_copy_state(app: &AppState) -> CopyModeState {
         register: app.copy_register,
         mark: app.copy_mark,
         last_jump: app.copy_last_jump,
+        last_col: app.copy_last_col,
         hide_position: app.copy_hide_position,
         in_search,
         search_input,
@@ -326,6 +328,7 @@ pub fn restore_copy_state_from_pane(app: &mut AppState) {
         app.copy_register = s.register;
         app.copy_mark = s.mark;
         app.copy_last_jump = s.last_jump;
+        app.copy_last_col = s.last_col;
         app.copy_hide_position = s.hide_position;
         if s.in_search {
             app.mode = Mode::CopySearch { input: s.search_input, forward: s.search_input_forward };
@@ -630,19 +633,26 @@ pub fn current_prompt_pos(app: &mut AppState) -> Option<(u16,u16)> {
 }
 
 pub fn move_copy_cursor(app: &mut AppState, dx: i16, dy: i16) {
+    if dy != 0 {
+        vertical_move(app, false, |app| step_copy_row(app, dy));
+    } else if dx > 0 {
+        cursor_right(app);
+    } else if dx < 0 {
+        cursor_left(app);
+    }
+}
+
+/// Move the copy cursor `dy` screen rows, scrolling the view when the move
+/// leaves the visible area, and keep its column. The column is settled by
+/// `vertical_move`.
+fn step_copy_row(app: &mut AppState, dy: i16) {
     let win = &mut app.windows[app.active_idx];
     let p = match active_pane_mut(&mut win.root, &win.active_path) { Some(p) => p, None => return };
     let mut parser = match p.term.lock() { Ok(g) => g, Err(_) => return };
     // Use tracked copy_pos if available, otherwise fall back to terminal cursor
     let (r, c) = app.copy_pos.unwrap_or_else(|| parser.screen().cursor_position());
     let rows = p.last_rows;
-    let cols = p.last_cols;
     let desired_r = r as i16 + dy;
-    let nc = if dy == 0 {
-        step_over_wide(parser.screen(), r, c, dx, cols)
-    } else {
-        (c as i16 + dx).max(0).min(cols as i16 - 1) as u16
-    };
     // If cursor would move above the visible area, scroll up into scrollback
     let nr = if desired_r < 0 {
         let scroll_lines = (-desired_r) as usize;
@@ -664,11 +674,173 @@ pub fn move_copy_cursor(app: &mut AppState, dx: i16, dy: i16) {
     } else {
         desired_r as u16
     };
-    // An up or down step keeps the column, as tmux's does, even when it is the
-    // second cell of a wide character on the new row. Moving it to the first
-    // cell would lose the column: up and back down over a CJK line would end
-    // one column to the left of where it began.
-    app.copy_pos = Some((nr, nc));
+    app.copy_pos = Some((nr, c));
+}
+
+/// What a column limit needs to know about the copy cursor's row.
+struct RowInfo {
+    /// tmux's window_copy_find_length: the row's length, trailing blanks out.
+    len: u16,
+    /// tmux's grid_line_limit: the first cell of the row's last character.
+    last: u16,
+    cols: u16,
+}
+
+fn cursor_row_info(app: &AppState, row: u16) -> Option<RowInfo> {
+    let win = app.windows.get(app.active_idx)?;
+    let p = active_pane(&win.root, &win.active_path)?;
+    let parser = p.term.lock().ok()?;
+    let cols = p.last_cols;
+    Some(screen_row_info(parser.screen(), row, cols))
+}
+
+/// tmux's grid_line_limit: the first cell of the last character of a row of
+/// length `len`, 0 for an empty row.
+fn line_last_char(screen: &vt100::Screen, row: u16, len: u16) -> u16 {
+    if len == 0 { 0 } else { off_padding(screen, row, len - 1) }
+}
+
+/// tmux's window_copy_cursor_limit: the last column the copy cursor may take
+/// on a row. vi keys stop on the first cell of the last character, emacs keys
+/// (and `allow_onemore`) one past the text.
+fn cursor_limit(info: &RowInfo, vi: bool, allow_onemore: bool) -> u16 {
+    if allow_onemore || !vi { info.len } else { info.last }
+}
+
+fn screen_row_info(screen: &vt100::Screen, row: u16, cols: u16) -> RowInfo {
+    let len = row_text_length(screen, row, cols);
+    RowInfo { len, last: line_last_char(screen, row, len), cols }
+}
+
+/// A vertical move of the copy cursor, with the column tmux gives it.
+///
+/// tmux remembers the column a run of up and down moves started from
+/// (`lastcx`) and the length of the line it was on (`lastsx`): each move goes
+/// back to that column, held inside the new line (window_copy_update_cursor
+/// applies window_copy_cursor_limit), and a cursor that was at or past the
+/// end of its line goes to the end of the new one. So up and down over a
+/// short line come back to the column they left, and end-of-line followed by
+/// down stays at the end of each line. A rectangle selection keeps the
+/// column, and the rectangle flag lets it go past the text.
+///
+/// `page` is a page or half page move (window_copy_pageup1 and pagedown1),
+/// which takes the remembered column without the limit and goes to the end
+/// of the line, wrapped rows followed, when it lands past the text.
+fn vertical_move(app: &mut AppState, page: bool, mv: impl FnOnce(&mut AppState)) {
+    let vi = app.mode_keys != "emacs";
+    let rectflag = app.copy_selection_mode == crate::types::SelectionMode::Rect;
+    let norectsel = app.copy_anchor.is_none() || !rectflag;
+    let (r, c) = match get_copy_pos(app) { Some(p) => p, None => { mv(app); return } };
+    if let Some(info) = cursor_row_info(app, r) {
+        if (norectsel || page) && c != info.len {
+            app.copy_last_col = (c, info.len);
+        }
+    }
+    mv(app);
+    let (nr, moved_c) = match app.copy_pos { Some(p) => p, None => return };
+    let info = match cursor_row_info(app, nr) { Some(i) => i, None => return };
+    let (lastcx, lastsx) = app.copy_last_col;
+    let px = info.len;
+    let past = |cx: u16| (cx >= lastsx && cx != px) || cx > px;
+    if page {
+        app.copy_pos = Some((nr, lastcx.min(info.cols)));
+        if norectsel && past(lastcx) {
+            move_to_line_end(app);
+        }
+        return;
+    }
+    let mut nc = if norectsel { lastcx } else { moved_c };
+    if !rectflag {
+        nc = nc.min(cursor_limit(&info, vi, false));
+    }
+    if norectsel && past(nc) {
+        nc = if rectflag { px } else { px.min(cursor_limit(&info, vi, false)) };
+    }
+    app.copy_pos = Some((nr, nc.min(info.cols)));
+}
+
+/// `cursor-right`, tmux's window_copy_cursor_right over
+/// grid_reader_cursor_right: one character right, over the second cell of a
+/// wide character, as far as the end of the text (one past it with emacs
+/// keys, the pane's width in a rectangle selection). From there it goes on
+/// to the start of the next line.
+fn cursor_right(app: &mut AppState) {
+    let vi = app.mode_keys != "emacs";
+    let rectflag = app.copy_selection_mode == crate::types::SelectionMode::Rect;
+    let all = app.copy_anchor.is_some() && rectflag;
+    let (r, c) = match get_copy_pos(app) { Some(p) => p, None => return };
+    let win = &mut app.windows[app.active_idx];
+    let p = match active_pane_mut(&mut win.root, &win.active_path) { Some(p) => p, None => return };
+    let mut parser = match p.term.lock() { Ok(g) => g, Err(_) => return };
+    let rows = p.last_rows;
+    let cols = p.last_cols;
+    let info = screen_row_info(parser.screen(), r, cols);
+    let px = if all { cols } else { cursor_limit(&info, vi, false) };
+    if c >= px {
+        // The last line of the buffer is the bottom row with no scroll left.
+        if r + 1 < rows {
+            app.copy_pos = Some((r + 1, 0));
+        } else {
+            let current = parser.screen().scrollback();
+            if current > 0 {
+                parser.screen_mut().set_scrollback(current - 1);
+                app.copy_scroll_offset = parser.screen().scrollback();
+                app.copy_pos = Some((r, 0));
+            }
+        }
+        return;
+    }
+    let mut x = c + 1;
+    while x < px && is_padding(parser.screen(), r, x) {
+        x += 1;
+    }
+    if !rectflag {
+        x = x.min(cursor_limit(&info, vi, false));
+    }
+    app.copy_pos = Some((r, x.min(cols)));
+}
+
+/// `cursor-left`, tmux's window_copy_cursor_left over
+/// grid_reader_cursor_left. From the second cell of a wide character it first
+/// backs off to the first cell, then steps one cell, so it can stop on the
+/// second cell of the character before: a left walk visits the same columns
+/// as tmux's, and a selection made leftwards copies what tmux's copies. From
+/// one past a full row it goes to the last column. From the start of a line
+/// it goes to the end of the line above, scrolling into the history at the
+/// top of the pane.
+fn cursor_left(app: &mut AppState) {
+    let vi = app.mode_keys != "emacs";
+    let rectflag = app.copy_selection_mode == crate::types::SelectionMode::Rect;
+    let (r, c) = match get_copy_pos(app) { Some(p) => p, None => return };
+    let win = &mut app.windows[app.active_idx];
+    let p = match active_pane_mut(&mut win.root, &win.active_path) { Some(p) => p, None => return };
+    let mut parser = match p.term.lock() { Ok(g) => g, Err(_) => return };
+    let cols = p.last_cols;
+    let start = off_padding(parser.screen(), r, c.min(cols));
+    if start > 0 {
+        let x = start - 1;
+        let limit = cursor_limit(&screen_row_info(parser.screen(), r, cols), vi, false);
+        app.copy_pos = Some((r, if rectflag { x } else { x.min(limit) }));
+        return;
+    }
+    let nr = if r > 0 {
+        r - 1
+    } else {
+        let current = parser.screen().scrollback();
+        parser.screen_mut().set_scrollback(current + 1);
+        if parser.screen().scrollback() == current {
+            // The first line of the history: nowhere to go.
+            app.copy_pos = Some((r, 0));
+            return;
+        }
+        app.copy_scroll_offset = parser.screen().scrollback();
+        0
+    };
+    // The end of the line above, its text only: emacs keys one past it, vi
+    // keys on its last character, the first cell of a wide one.
+    let info = screen_row_info(parser.screen(), nr, cols);
+    let x = if rectflag { info.len } else { cursor_limit(&info, vi, false) };
+    app.copy_pos = Some((nr, x.min(cols)));
 }
 
 /// Whether (`row`, `col`) is the second cell of a wide character, a CJK
@@ -685,40 +857,6 @@ fn off_padding(screen: &vt100::Screen, row: u16, col: u16) -> u16 {
         x -= 1;
     }
     x
-}
-
-/// The column one character left (`dx < 0`) or right of `col` on `row`.
-///
-/// Right steps over the second cell of a wide character, as tmux's
-/// grid_reader_cursor_right does (grid-reader.c), and stays put when that
-/// second cell is the last column. Stepping one cell at a time stopped on the
-/// second cell, so a wide character took two presses to cross.
-///
-/// Left is tmux's grid_reader_cursor_left: from the second cell of a wide
-/// character it first backs off to the first cell, then steps one cell, so it
-/// can stop on the second cell of the character before. A left walk therefore
-/// visits the same columns as tmux's, and a selection made leftwards copies
-/// what tmux's copies.
-///
-/// With emacs keys the cursor can be one past a full row that does not wrap,
-/// at column `cols` (see `line_end_pos`); left from there is the last column,
-/// and right stays put.
-fn step_over_wide(screen: &vt100::Screen, row: u16, col: u16, dx: i16, cols: u16) -> u16 {
-    let last = cols.saturating_sub(1);
-    if dx > 0 {
-        if col >= last {
-            return col.min(cols);
-        }
-        let mut x = col.saturating_add(1).min(last);
-        while x < last && is_padding(screen, row, x) {
-            x += 1;
-        }
-        off_padding(screen, row, x)
-    } else if dx < 0 {
-        off_padding(screen, row, col.min(cols)).saturating_sub(1)
-    } else {
-        col.min(last)
-    }
 }
 
 /// Helper: read a full row of text from the active pane's screen.
@@ -1045,16 +1183,56 @@ pub fn scroll_pane_scrollback(app: &mut AppState, lines: usize, up: bool) {
     parser.screen_mut().set_scrollback(new_offset);
 }
 
+/// `scroll-up` (and the wheel, which runs it), tmux's
+/// window_copy_cmd_scroll_up: `lines` steps up in the history. With a
+/// selection the view scrolls and the cursor is left alone. Otherwise each
+/// step is window_copy_cursor_up with scroll_only: the cursor keeps its
+/// screen row and its column is settled as for any vertical move. At the top
+/// of the history nothing changes.
 pub fn scroll_copy_up(app: &mut AppState, lines: usize) {
-    scroll_pane_scrollback(app, lines, true);
-    let win = &mut app.windows[app.active_idx];
-    let p = match active_pane_mut(&mut win.root, &win.active_path) { Some(p) => p, None => return };
-    let parser = match p.term.lock() { Ok(g) => g, Err(_) => return };
-    app.copy_scroll_offset = parser.screen().scrollback();
+    scroll_copy_lines(app, lines, true);
 }
 
+/// `scroll-down`, tmux's window_copy_cmd_scroll_down: `scroll_copy_up` the
+/// other way. At the bottom nothing changes.
 pub fn scroll_copy_down(app: &mut AppState, lines: usize) {
-    scroll_pane_scrollback(app, lines, false);
+    scroll_copy_lines(app, lines, false);
+}
+
+fn scroll_copy_lines(app: &mut AppState, lines: usize, up: bool) {
+    if !view_can_scroll(app, up) {
+        return;
+    }
+    if app.copy_anchor.is_some() {
+        scroll_copy_view(app, lines, up);
+        return;
+    }
+    for _ in 0..lines {
+        vertical_move(app, false, |app| scroll_copy_view(app, 1, up));
+    }
+}
+
+/// Whether the active pane's view can move up (into older history) or down
+/// (toward the live screen).
+fn view_can_scroll(app: &AppState, up: bool) -> bool {
+    let Some(win) = app.windows.get(app.active_idx) else { return false };
+    let Some(p) = active_pane(&win.root, &win.active_path) else { return false };
+    let Ok(mut parser) = p.term.lock() else { return false };
+    let current = parser.screen().scrollback();
+    if !up {
+        return current > 0;
+    }
+    parser.screen_mut().set_scrollback(current + 1);
+    let moved = parser.screen().scrollback() != current;
+    parser.screen_mut().set_scrollback(current);
+    moved
+}
+
+/// Scroll the view only: the cursor keeps its screen row and column. A mouse
+/// drag scrolls this way at the pane's edge, since the pointer places the
+/// cursor.
+pub fn scroll_copy_view(app: &mut AppState, lines: usize, up: bool) {
+    scroll_pane_scrollback(app, lines, up);
     let win = &mut app.windows[app.active_idx];
     let p = match active_pane_mut(&mut win.root, &win.active_path) { Some(p) => p, None => return };
     let parser = match p.term.lock() { Ok(g) => g, Err(_) => return };
@@ -1124,15 +1302,18 @@ fn active_pane_scroll_offset(app: &AppState) -> usize {
 /// cursor row by the whole page amount, clamped to the top row going up
 /// (window-copy.c:775-782) and to the last row going down (:833-840), which is
 /// what lets repeated page-ups reach the first line of the history.
+///
+/// The column is tmux's too: the one the run of vertical moves started from,
+/// or the end of the line when that is past the text.
 pub fn page_scroll(app: &mut AppState, up: bool, half_page: bool) {
+    vertical_move(app, true, |app| page_scroll_rows(app, up, half_page));
+}
+
+fn page_scroll_rows(app: &mut AppState, up: bool, half_page: bool) {
     let rows = match active_pane_rows(app) { Some(r) => r, None => return };
     let n = page_lines(rows, half_page);
     let before = active_pane_scroll_offset(app);
-    if up {
-        scroll_copy_up(app, n);
-    } else {
-        scroll_copy_down(app, n);
-    }
+    scroll_copy_view(app, n, up);
     let after = app.copy_scroll_offset;
     let moved = if up { after.saturating_sub(before) } else { before.saturating_sub(after) };
     if moved >= n {
@@ -1258,6 +1439,13 @@ pub fn scroll_to_bottom(app: &mut AppState) {
     let mut parser = match p.term.lock() { Ok(g) => g, Err(_) => return };
     parser.screen_mut().set_scrollback(0);
     app.copy_scroll_offset = 0;
+    // tmux window_copy_cmd_history_bottom puts the cursor on the last row of
+    // the pane, at the end of its text (window_copy_cursor_limit).
+    let rows = p.last_rows;
+    let last = rows.saturating_sub(1);
+    let info = screen_row_info(parser.screen(), last, p.last_cols);
+    let vi = app.mode_keys != "emacs";
+    app.copy_pos = Some((last, cursor_limit(&info, vi, false)));
 }
 
 /// Read a line number the way tmux reads it and jump there.
@@ -3206,7 +3394,7 @@ fn copy_walk_key(app: &AppState) -> (usize, u16) {
 /// not move (top or bottom of the buffer).
 fn step_copy_line(app: &mut AppState, down: bool) -> bool {
     let before = copy_walk_key(app);
-    move_copy_cursor(app, 0, if down { 1 } else { -1 });
+    step_copy_row(app, if down { 1 } else { -1 });
     copy_walk_key(app) != before
 }
 

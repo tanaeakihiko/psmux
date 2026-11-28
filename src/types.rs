@@ -1757,6 +1757,8 @@ pub struct CopyModeState {
     /// Mark and last-jump are pane-local like the rest of copy state (#498)
     pub mark: Option<(usize, u16, u16)>,
     pub last_jump: Option<(u8, char)>,
+    /// tmux's `lastcx` and `lastsx` (see `AppState::copy_last_col`).
+    pub last_col: (u16, u16),
     /// `toggle-position` is pane-local too, so a pane parked in copy mode keeps
     /// its own answer while another pane is focused (#704)
     pub hide_position: bool,
@@ -1999,6 +2001,10 @@ pub struct AppState {
     /// Last f/F/t/T jump as (kind, char), so `;` (jump-again) and `,`
     /// (jump-reverse) can repeat it (#498).
     pub copy_last_jump: Option<(u8, char)>,
+    /// tmux's `lastcx` and `lastsx`: the column a vertical move started from
+    /// and the length of the line it was on, so up and down come back to the
+    /// column, and a cursor at the end of its line stays at the end of each.
+    pub copy_last_col: (u16, u16),
     /// Automatic refresh of the copy-mode snapshot from the live pane, tmux's
     /// `refresh-on` / `refresh-off` / `refresh-toggle` (window-copy.c
     /// `refresh_active`). Off by default. The one shot `refresh-from-pane`,
@@ -3576,6 +3582,7 @@ impl AppState {
             clipboard_paste_pending: None,
             copy_mark: None,
             copy_last_jump: None,
+            copy_last_col: (0, 0),
             copy_refresh_live: false,
             copy_refresh_version: 0,
             copy_prompt_back: 0,

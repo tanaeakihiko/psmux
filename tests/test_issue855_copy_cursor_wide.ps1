@@ -103,8 +103,11 @@ try {
 
     Write-Head "C. the emoji line"
     Enter-At 1 0
+    # The `a` at 10 is the last character: vi keys go on from there to the
+    # start of the next line, as tmux 3.8 does (grid_line_limit), and left
+    # from there comes back to it. tmux 3.7c went to 11 first.
     $r = Walk cursor-right 6
-    Check (Same $r @(2, 4, 6, 8, 10, 11)) "cursor-right visits 2 4 6 8 10 11 (tmux)" "visited $($r -join ' ')"
+    Check (Same $r @(2, 4, 6, 8, 10, 0)) "cursor-right visits 2 4 6 8 10, then 0 of the next line (tmux 3.8)" "visited $($r -join ' ')"
     $l = Walk cursor-left 6
     Check (Same $l @(10, 9, 7, 5, 3, 1)) "cursor-left visits 10 9 7 5 3 1 (tmux)" "visited $($l -join ' ')"
 
