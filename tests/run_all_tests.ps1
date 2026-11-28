@@ -13,8 +13,20 @@ param(
     [int]$LongTimeoutSec = 900,     # Per-suite timeout (perf/stress/latency suites)
     [string]$Only,           # Regex filter: run only suites whose name matches
     [switch]$Resume,         # Continue the latest run: skip suites that already have a result
-    [string]$TestDir         # Override test directory (default: this script's folder)
+    [string]$TestDir,        # Override test directory (default: this script's folder)
+    # Sharding (tests\vmfarm): run only slice ShardIndex (1 based) of ShardCount,
+    # assigned by greedy longest first balancing on recorded suite durations
+    # (tests\vmfarm\ShardPlan.ps1). Applied after -Only, -PerfOnly and -Exclude.
+    [int]$ShardIndex = 0,
+    [int]$ShardCount = 0,
+    [string]$ShardTimings,   # durations: a results.jsonl or a JSON map (default tests\vmfarm\suite_durations.json)
+    [string]$Exclude         # Regex: drop matching suites from the run entirely (not even SKIP)
 )
+
+if ($ShardCount -lt 0 -or $ShardIndex -lt 0 -or ($ShardCount -gt 0 -and ($ShardIndex -lt 1 -or $ShardIndex -gt $ShardCount)) -or ($ShardIndex -gt 0 -and $ShardCount -eq 0)) {
+    Write-Host "Invalid shard: -ShardIndex must be 1..-ShardCount (got $ShardIndex of $ShardCount)" -ForegroundColor Red
+    exit 2
+}
 
 # ── Safety gate: this runner is DESTRUCTIVE to a live psmux ──────────────────
 # Before every test it kills ALL psmux processes (by image name) and deletes
@@ -1287,7 +1299,7 @@ $resolved = (Get-Command psmux -ErrorAction SilentlyContinue).Source
 
 Write-Log "Binary: $PSMUX"
 Write-Log "PATH resolves psmux to: $resolved"
-Write-Log "Params: SkipPerf=$SkipPerf IncludeWSL=$IncludeWSL IncludeInteractive=$IncludeInteractive DefaultTimeoutSec=$DefaultTimeoutSec LongTimeoutSec=$LongTimeoutSec Only='$Only' Resume=$Resume"
+Write-Log "Params: SkipPerf=$SkipPerf IncludeWSL=$IncludeWSL IncludeInteractive=$IncludeInteractive DefaultTimeoutSec=$DefaultTimeoutSec LongTimeoutSec=$LongTimeoutSec Only='$Only' Resume=$Resume$(if ($ShardCount -gt 0 -or $Exclude) { " ShardIndex=$ShardIndex ShardCount=$ShardCount Exclude='$Exclude'" })"
 
 Write-Host "Binary: $PSMUX" -ForegroundColor Cyan
 Write-Host "Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Cyan
@@ -2102,6 +2114,23 @@ if ($PerfOnly) {
     if ($SkipPerf) { Write-Host "  -PerfOnly and -SkipPerf together run nothing; -SkipPerf ignored" -ForegroundColor Yellow; $SkipPerf = $false }
     $allTests = @($allTests | Where-Object { $perfTests -contains $_.BaseName })
     Write-Log "Filter -PerfOnly matched $($allTests.Count) suites"
+}
+if ($Exclude) {
+    $dropped = @($allTests | Where-Object { $_.BaseName -match $Exclude })
+    $allTests = @($allTests | Where-Object { $_.BaseName -notmatch $Exclude })
+    Write-Log "Filter -Exclude '$Exclude' removed $($dropped.Count) suites: $(($dropped | ForEach-Object BaseName) -join ', ')"
+}
+if ($ShardCount -gt 0) {
+    . (Join-Path $PSScriptRoot 'vmfarm\ShardPlan.ps1')
+    $timingsPath = if ($ShardTimings) { $ShardTimings } else { Join-Path $PSScriptRoot 'vmfarm\suite_durations.json' }
+    $durations = Read-SuiteDurations -Path $timingsPath
+    $plan = @(Get-ShardPlan -Suites @($allTests | ForEach-Object BaseName) -ShardCount $ShardCount -Durations $durations)
+    $mine = $plan[$ShardIndex - 1]
+    $mineSet = @{}; foreach ($n in $mine.Suites) { $mineSet[$n] = $true }
+    $allTests = @($allTests | Where-Object { $mineSet.ContainsKey($_.BaseName) })
+    Write-Log ("Shard {0}/{1}: {2} suites, estimated {3:N0}s (shard estimates: {4}) from {5} recorded durations in {6}" -f `
+        $ShardIndex, $ShardCount, $allTests.Count, $mine.Seconds, (($plan | ForEach-Object { '{0:N0}' -f $_.Seconds }) -join '/'), $durations.Count, $timingsPath)
+    Write-Host ("  Shard {0} of {1}: {2} suites, estimated {3:N1} min" -f $ShardIndex, $ShardCount, $allTests.Count, ($mine.Seconds / 60)) -ForegroundColor Cyan
 }
 $totalSuites = $allTests.Count
 Write-Host ""

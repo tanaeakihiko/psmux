@@ -1,0 +1,48 @@
+# Suites that measure wall clock performance against fixed thresholds, or
+# launch and time real terminal emulators. A VM's virtual CPUs and timer make
+# their numbers meaningless, so Invoke-ShardedSweep.ps1 excludes them from the
+# shards (run_all_tests.ps1 -Exclude). Run them on the host instead:
+#     tests\vmfarm\Invoke-ShardedSweep.ps1 -ListHostOnly   (prints the -Only regex)
+# One suite name per line; text after # is a comment.
+
+# The runner's own $perfTests group
+test_stress
+test_stress_50
+test_stress_aggressive
+test_extreme_perf
+test_e2e_latency
+test_pane_startup_perf
+test_startup_perf
+test_perf
+test_launch_to_prompt_gate
+test_keystroke_latency_gate
+test_creation_latency_gate
+test_idle_socket_traffic
+test_perf_vs_terminals
+test_launch_visible_prompt_gate
+test_typing_benchmark
+
+# Other latency and throughput gates
+test_burst_typing_benchmark
+test_keystroke_latency_bench
+test_long_paragraph_benchmark
+test_startup_exit_bench
+test_render_pressure_input_latency
+test_issue841_escape_keystroke_latency
+test_typing_render_latency
+test_realistic_typing
+test_sustained_fast_typing
+test_issue237_typing_freeze_perf
+test_issue272_status_format_perf
+test_issue530_registry_accumulation_perf
+test_issue22_last_window_exit_perf
+test_install_speed
+test_perf_vs_wt
+
+# Need WSL, which the farm VMs do not have
+test_wsl_in_pwsh_latency
+test_wsl_in_pwsh_latency2
+test_wsl_latency
+test_wsl_pwsh_latency3
+test_wsl_pwsh_latency4
+test_wsl_pwsh_latency5
