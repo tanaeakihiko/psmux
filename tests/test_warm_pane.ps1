@@ -473,6 +473,19 @@ $testDir = $env:USERPROFILE
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 & $PSMUX new-window -t $session -c $testDir 2>&1 | Out-Null
 $dirResult = Wait-PanePrompt -SessionName $session -TimeoutMs ($PromptTimeoutSec * 1000)
+if ($dirResult.Found) {
+    # The re-home is a cd the server types into the transplanted shell, so the
+    # first prompt can still be the warm pane's own directory; wait for the one
+    # the cd leaves. Wrapped rows are joined, since a long directory wraps the
+    # prompt.
+    $want = "PS " + [regex]::Escape($testDir.TrimEnd('\')) + ">"
+    $swHome = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($swHome.ElapsedMilliseconds -lt ($PromptTimeoutSec * 1000)) {
+        $joined = & $PSMUX capture-pane -t $session -p -J 2>&1 | Out-String
+        if ($joined -match $want) { $dirResult = @{ Found = $true; ElapsedMs = $swHome.ElapsedMilliseconds; Output = $joined }; break }
+        Start-Sleep -Milliseconds 50
+    }
+}
 $sw.Stop()
 if ($dirResult.Found) {
     Write-Metric "  new-window -c (warm re-home)" $sw.ElapsedMilliseconds

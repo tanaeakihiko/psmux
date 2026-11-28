@@ -55,7 +55,14 @@ if (-not $cargo) {
 } else {
     $branch = (& git -C $repo rev-parse --abbrev-ref HEAD 2>$null)
     $head = (& git -C $repo rev-parse --short HEAD 2>$null)
-    if (-not $branch -or $branch -eq 'HEAD') {
+    # A copy of the suites outside a checkout (a test machine's bundle) can sit
+    # inside some other repository, whose branch git then reports; cargo is
+    # given $repo itself, and that is no repository.
+    $top = (& git -C $repo rev-parse --show-toplevel 2>$null)
+    $inCheckout = $top -and ((Resolve-Path $top).Path.TrimEnd('\') -eq $repo.TrimEnd('\'))
+    if (-not $inCheckout) {
+        Write-Skip "the suite is not in a git checkout of its own ($repo), so there is nothing to install from"
+    } elseif (-not $branch -or $branch -eq 'HEAD') {
         Write-Skip "repo HEAD is detached; cargo install --git needs a branch"
     } else {
         $root = Join-Path $env:TEMP "psmux-i647-root"
