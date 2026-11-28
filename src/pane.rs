@@ -3794,20 +3794,25 @@ fn bare_program_image(token: &str) -> Option<String> {
 /// sleep forever (#580).
 pub(crate) const POWERSHELL_CAT_BLOCKER: &str =
     "$__psmux_in=[Console]::In; while($__psmux_in.Read() -ge 0){}; Start-Sleep -Seconds 2147483";
-/// The same blocker for a POSIX shell, using only builtins until EOF so it
-/// does not depend on `cat` being on the pane's PATH.
+/// A POSIX shell runs the real `cat`, as tmux does (`$SHELL -c cat`), so the
+/// placeholder echoes and blocks exactly like tmux's. The #580 substitution
+/// exists only for PowerShell's `Get-Content` alias and for CreateProcessW
+/// finding no `cat`; neither applies here. Only when the shell cannot find a
+/// `cat` (a bare MSYS bash without usr\bin on PATH) does it fall back to a
+/// builtin read loop.
 pub(crate) const POSIX_CAT_BLOCKER: &str =
-    "while read -r _psmux_l; do :; done; exec sleep 2147483";
-/// fish has its own loop syntax.
+    "if command -v cat >/dev/null 2>&1; then exec cat; fi; while read -r _psmux_l; do :; done; exec sleep 2147483";
+/// The same for fish, in its own syntax.
 pub(crate) const FISH_CAT_BLOCKER: &str =
-    "while read -l _psmux_l; end; exec sleep 2147483";
+    "if command -q cat; exec cat; end; while read -l _psmux_l; end; exec sleep 2147483";
 
 /// How the `cat` placeholder is started for a given default shell (#1115).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CatBlocker {
     /// The pane shell is PowerShell: run this script through it as before.
     PaneShell(&'static str),
-    /// The pane shell is a POSIX style shell: run `<shell> -c <script>`.
+    /// The pane shell is a POSIX style shell: run `<shell> -c <script>`,
+    /// which execs the real `cat` (tmux parity).
     PosixShell(&'static str),
     /// cmd.exe or any other shell that cannot express a blocker: start
     /// PowerShell itself with the PowerShell blocker.

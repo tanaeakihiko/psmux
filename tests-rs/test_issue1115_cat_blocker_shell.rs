@@ -80,3 +80,55 @@ fn posix_blocker_parses_in_git_bash_when_present() {
         .expect("run bash -n");
     assert!(!old.status.success());
 }
+
+/// tmux parity: under a POSIX shell the placeholder IS `cat`, so it echoes
+/// what it reads and ends at EOF exactly like tmux's `$SHELL -c cat`.
+#[cfg(windows)]
+#[test]
+fn posix_blocker_runs_the_real_cat_in_git_bash() {
+    use std::io::Write;
+    let bash = r"C:\Program Files\Git\bin\bash.exe";
+    if !std::path::Path::new(bash).exists() {
+        eprintln!("skip: Git Bash not installed");
+        return;
+    }
+    let mut child = std::process::Command::new(bash)
+        .args(["-c", POSIX_CAT_BLOCKER])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn bash");
+    child.stdin.take().unwrap().write_all(b"hello 1115\n").unwrap();
+    let out = child.wait_with_output().expect("wait bash");
+    assert!(out.status.success(), "status {:?}", out.status);
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello 1115");
+}
+
+/// With no `cat` in the shell's PATH the builtin loop drains input silently
+/// instead of failing with "cat: command not found".
+#[cfg(windows)]
+#[test]
+fn posix_blocker_falls_back_when_cat_is_missing() {
+    use std::io::Write;
+    let bash = r"C:\Program Files\Git\usr\bin\bash.exe";
+    if !std::path::Path::new(bash).exists() {
+        eprintln!("skip: Git usr\\bin\\bash.exe not installed");
+        return;
+    }
+    // PATH names nothing that exists, so `command -v cat` finds nothing.
+    let script = format!("PATH=/nonexistent; {POSIX_CAT_BLOCKER}");
+    let mut child = std::process::Command::new(bash)
+        .args(["--norc", "--noprofile", "-c", &script])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn bash");
+    child.stdin.take().unwrap().write_all(b"hello 1115\n").unwrap();
+    let out = child.wait_with_output().expect("wait bash");
+    // The loop read the line without echoing it; after EOF `exec sleep`
+    // cannot be found either, which only happens here because stdin closed.
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("cat:"), "stderr: {err}");
+}

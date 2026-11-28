@@ -17,6 +17,7 @@
 #      (polled, Git Bash is slow to start) and shows no shell error
 #   2. split-window -d -- cat - : same
 #   3. split-window -d cat (string form): same
+#   1b. under Git Bash the placeholder is the real cat, as in tmux
 #   4. typed input does not end the blocker
 #   5. respawn-pane -k replaces the placeholder with the real command
 #
@@ -107,6 +108,13 @@ function Invoke-Shell([string]$name, [string]$shell) {
         if ($p3) { $panes["$name arm 3 (string cat)"] = $p3 }
         Test-Placeholders $ns $panes $watch
         if (-not $p1) { return }
+
+        # tmux parity: under a POSIX shell the placeholder is the real cat.
+        if ($shell -match 'bash') {
+            $cc = (& $PSMUX -L $ns display-message -p -t $p1 '#{pane_current_command}' 2>&1 | Out-String).Trim()
+            if ($cc -eq 'cat') { Write-Pass "$name arm 1b: the placeholder runs the real cat (tmux parity)" }
+            else { Write-Fail "$name arm 1b: pane_current_command is [$cc], want cat" }
+        }
 
         # Arm 4: typing into the placeholder does not end it.
         & $PSMUX -L $ns send-keys -t $p1 'hello there' Enter | Out-Null
