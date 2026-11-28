@@ -56,8 +56,7 @@ fn build_frame(app: &mut AppState, c: &mut FrameCache, meta_dirty: &mut bool) ->
     if *meta_dirty {
         c.cached_windows_json = list_windows_json_with_tabs(app)?;
         c.cached_tree_json = list_tree_json(app)?;
-        c.cached_prefix_str = crate::config::format_option_key(&app.prefix_key);
-        c.cached_prefix2_str = app.prefix2_key.as_ref().map(format_key_binding).unwrap_or_default();
+        (c.cached_prefix_str, c.cached_prefix2_str) = prefix_json_strings(&app.prefix_key, app.prefix2_key.as_ref());
         c.cached_base_index = app.window_base_index;
         c.cached_pred_dim = app.prediction_dimming;
         c.cached_status_style = app.status_style.clone();
@@ -354,3 +353,7 @@ fn auto_rename_windows(app: &mut AppState) -> bool {
 #[cfg(test)]
 #[path = "../../../tests-rs/test_issue431_shared_frame.rs"]
 mod test_issue431_shared_frame;
+
+#[cfg(test)]
+#[path = "../../../tests-rs/test_issue1118_shared_frame_prefix.rs"]
+mod test_issue1118_shared_frame_prefix;
