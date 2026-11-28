@@ -39,6 +39,8 @@ fn facts() -> WarmStandbyFacts {
         spawner_alive: true,
         kill_marker: None,
         data_dir_present: true,
+        live_peer: None,
+        held: false,
     }
 }
 
@@ -100,8 +102,11 @@ fn unknown_times_never_end_a_standby() {
         spawner_alive: false,
         kill_marker: Some(u64::MAX),
         data_dir_present: true,
+        live_peer: Some(false),
+        held: false,
     };
     assert_eq!(warm_standby_verdict(&f), WarmStandbyVerdict::Keep);
+    assert_eq!(warm_standby_verdict_with_peers(&f), WarmStandbyVerdict::Keep);
 }
 
 #[test]
@@ -187,5 +192,78 @@ fn force_killed_sets_are_swept_and_nothing_else() {
         assert!(dir.join(format!("wo_ns__other.{ext}")).exists(), "{ext} of other removed");
         assert!(dir.join(format!("wo_zz____warm__.{ext}")).exists(), "{ext} out of scope removed");
     }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// The namespace's last server gone without a kill-server: kill-session of the
+// last session, its shell exiting, or a crash (taskkill /F). The standby held
+// its shells forever (22 of them on a test host in one afternoon).
+#[test]
+fn an_empty_namespace_ends_the_standby() {
+    let mut f = facts();
+    f.spawner_alive = false;
+    f.live_peer = Some(false);
+    assert_eq!(warm_standby_verdict_with_peers(&f), WarmStandbyVerdict::NamespaceEmpty);
+}
+
+#[test]
+fn a_live_peer_keeps_the_pool() {
+    // kill-session of one of several sessions: the pool stays for the rest.
+    let mut f = facts();
+    f.spawner_alive = false;
+    f.live_peer = Some(true);
+    assert_eq!(warm_standby_verdict_with_peers(&f), WarmStandbyVerdict::Keep);
+    // While the spawner runs nothing else is asked.
+    let f = facts();
+    assert_eq!(warm_standby_verdict_with_peers(&f), WarmStandbyVerdict::Keep);
+}
+
+#[test]
+fn unknown_peers_no_spawner_or_held_keep_the_standby() {
+    let mut f = facts();
+    f.spawner_alive = false;
+    f.live_peer = None;
+    assert_eq!(warm_standby_verdict_with_peers(&f), WarmStandbyVerdict::Keep);
+    // start-server's standby has no spawner.
+    f.live_peer = Some(false);
+    f.spawner_creation = None;
+    assert_eq!(warm_standby_verdict_with_peers(&f), WarmStandbyVerdict::Keep);
+    // exit-empty off: the standby is the namespace's empty server.
+    let mut f = facts();
+    f.spawner_alive = false;
+    f.live_peer = Some(false);
+    f.held = true;
+    assert_eq!(warm_standby_verdict_with_peers(&f), WarmStandbyVerdict::Keep);
+}
+
+#[test]
+fn kill_verdicts_still_win() {
+    let mut f = facts();
+    f.spawner_alive = false;
+    f.live_peer = Some(true);
+    f.kill_marker = Some(800);
+    assert_eq!(warm_standby_verdict_with_peers(&f), WarmStandbyVerdict::SpawnerKilled);
+}
+
+#[test]
+fn live_peer_reads_the_namespace_registry() {
+    let dir = temp_dir("peers");
+    // A dead server's file, a recycled pid, and a live peer in another namespace.
+    fs::write(dir.join("ns1__a.pid"), "100:111").unwrap();
+    fs::write(dir.join("ns1__b.pid"), "200:222").unwrap();
+    fs::write(dir.join("ns2__c.pid"), "300:333").unwrap();
+    fs::write(dir.join("ns1____warm__.pid"), "400:444").unwrap();
+    let alive = |pid: u32| match pid {
+        200 => Some(999), // recycled: another process now
+        300 => Some(333),
+        400 => Some(444),
+        _ => None,
+    };
+    assert!(!namespace_has_live_peer(&dir, Some("ns1"), 400, alive), "only dead or recycled peers");
+    fs::write(dir.join("ns1__d.pid"), "500:555").unwrap();
+    let alive2 = |pid: u32| if pid == 500 { Some(555) } else { alive(pid) };
+    assert!(namespace_has_live_peer(&dir, Some("ns1"), 400, alive2));
+    // The default namespace does not see -L namespaces.
+    assert!(!namespace_has_live_peer(&dir, None, 400, alive2));
     let _ = fs::remove_dir_all(&dir);
 }

@@ -884,7 +884,7 @@ fn check_warm_standby_orphaned(app: &AppState) -> crate::session::WarmStandbyVer
     let dir = crate::paths::psmux_dir();
     let dir_path = std::path::Path::new(&dir);
     let spawner = warm_spawner();
-    let facts = crate::session::WarmStandbyFacts {
+    let mut facts = crate::session::WarmStandbyFacts {
         own_creation: crate::platform::process_kill::process_creation_time(std::process::id()),
         spawner_creation: spawner.map(|(_, c)| c),
         // Creation time alone is not liveness (an exited process whose object
@@ -897,8 +897,25 @@ fn check_warm_standby_orphaned(app: &AppState) -> crate::session::WarmStandbyVer
             .unwrap_or(false),
         kill_marker: crate::session::read_kill_marker(dir_path, app.socket_name.as_deref()),
         data_dir_present: dir_path.is_dir(),
+        live_peer: None,
+        held: app.is_held_standby(),
     };
-    crate::session::warm_standby_verdict(&facts)
+    // The registry walk is only needed once the spawner is gone.
+    if facts.spawner_creation.is_some() && !facts.spawner_alive {
+        facts.live_peer = Some(crate::session::namespace_has_live_peer(
+            dir_path,
+            app.socket_name.as_deref(),
+            std::process::id(),
+            |pid| {
+                if crate::platform::process_is_alive(pid) {
+                    crate::platform::process_kill::process_creation_time(pid)
+                } else {
+                    None
+                }
+            },
+        ));
+    }
+    crate::session::warm_standby_verdict_with_peers(&facts)
 }
 
 /// Spawn a standby "warm server" process that pre-loads config + shell.
@@ -3268,7 +3285,21 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
         // handled here too, can never be undone halfway by the watchdog.
         if app.is_warm_server() && last_warm_orphan_check.elapsed() >= WARM_ORPHAN_CHECK_INTERVAL {
             last_warm_orphan_check = Instant::now();
-            let verdict = check_warm_standby_orphaned(&app);
+            let mut verdict = check_warm_standby_orphaned(&app);
+            // An empty namespace is not a kill: a `new-session` may be
+            // claiming this standby right now (it renames our .port first,
+            // then sends claim-session). Take the .port by the same rename;
+            // whoever renames it first wins, so a claim in flight keeps the
+            // standby and a standby that is leaving can never be claimed.
+            if verdict == crate::session::WarmStandbyVerdict::NamespaceEmpty {
+                let port_path = crate::paths::port_file(&app.port_file_base());
+                let retiring = format!("{}.retiring.{}", port_path, std::process::id());
+                if std::fs::rename(&port_path, &retiring).is_ok() {
+                    let _ = std::fs::remove_file(&retiring);
+                } else {
+                    verdict = crate::session::WarmStandbyVerdict::Keep;
+                }
+            }
             if verdict != crate::session::WarmStandbyVerdict::Keep {
                 warm_debug(&format!("standby orphaned ({:?}) -- exiting", verdict));
                 crate::session::remove_session_registry_files(std::path::Path::new(

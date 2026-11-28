@@ -1510,6 +1510,13 @@ pub struct WarmStandbyFacts {
     pub kill_marker: Option<u64>,
     /// Whether the data directory still exists.
     pub data_dir_present: bool,
+    /// Whether another server registered in this namespace is running under
+    /// its recorded identity. `None` when it was not looked up (it is only
+    /// needed once the spawner is gone) or could not be read.
+    pub live_peer: Option<bool>,
+    /// `exit-empty off`: the standby is the namespace's empty server, which
+    /// tmux keeps running with no sessions (#734).
+    pub held: bool,
 }
 
 /// Why an unclaimed standby must end, or `Keep`.
@@ -1525,6 +1532,12 @@ pub enum WarmStandbyVerdict {
     /// The spawner is dead and a kill-server ran after the spawner was
     /// created: the kill that ended the spawner is the one this standby missed.
     SpawnerKilled,
+    /// The spawner is dead and no other server of the namespace is running:
+    /// its last session was killed, exited, or its server crashed. tmux ends
+    /// the server with the last session (exit-empty), so the standby, which
+    /// only exists to make the next session of a running namespace instant,
+    /// ends too instead of holding its shells forever.
+    NamespaceEmpty,
 }
 
 /// The decision, kept free of I/O so it can be tested exhaustively.
@@ -1560,6 +1573,34 @@ pub fn warm_standby_verdict(f: &WarmStandbyFacts) -> WarmStandbyVerdict {
         }
     }
     WarmStandbyVerdict::Keep
+}
+
+/// [`warm_standby_verdict`] plus the rule for a namespace whose last server
+/// is gone without a kill-server.
+pub fn warm_standby_verdict_with_peers(f: &WarmStandbyFacts) -> WarmStandbyVerdict {
+    let v = warm_standby_verdict(f);
+    if v != WarmStandbyVerdict::Keep {
+        return v;
+    }
+    // Only a standby that knows its spawner, saw it gone under the same
+    // identity, and found no other live server ends here. A standby started
+    // by `start-server` has no spawner and is left alone, as is the held
+    // empty server of `exit-empty off`.
+    if f.spawner_creation.is_some() && !f.spawner_alive && f.live_peer == Some(false) && !f.held {
+        return WarmStandbyVerdict::NamespaceEmpty;
+    }
+    WarmStandbyVerdict::Keep
+}
+
+/// Whether a server other than `self_pid` registered in namespace `ns` is
+/// running under its recorded identity.
+pub fn namespace_has_live_peer(
+    dir: &Path,
+    ns: Option<&str>,
+    self_pid: u32,
+    creation_of: impl Fn(u32) -> Option<u64>,
+) -> bool {
+    !is_first_server_in_namespace(&namespace_peer_pids(dir, ns, self_pid), creation_of)
 }
 
 /// `.pid` registry entries belonging to namespace `ns`, excluding `self_pid`
