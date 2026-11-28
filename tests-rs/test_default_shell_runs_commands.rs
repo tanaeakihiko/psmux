@@ -42,7 +42,44 @@ fn a_command_string_runs_in_the_named_shell() {
     let b = build_command_in(Some("echo %OS% & ver"), Some(&shell), false, false);
     let a = argv(&b);
     assert!(a[0].to_ascii_lowercase().ends_with("cmd.exe"), "{a:?}");
-    assert_eq!(&a[1..], ["/C", "echo %OS% & ver"], "{a:?}");
+    assert_eq!(&a[1..], ["/S", "/C"], "{a:?}");
+    // cmd reads its own command line: the line goes in verbatim, quoted once.
+    assert_eq!(b.get_raw_tail().map(|t| t.to_string_lossy().into_owned()).as_deref(), Some("\"echo %OS% & ver\""));
+}
+
+/// A quote in a cmd command used to reach cmd as a CommandLineToArgvW `\"`
+/// escape, which cmd reads literally ("The filename, directory name, or
+/// volume label syntax is incorrect"). The line now goes in verbatim.
+#[cfg(windows)]
+#[test]
+fn a_quoted_cmd_command_reaches_cmd_unescaped() {
+    let shell = command_shell_for(&cmd_exe()).unwrap();
+    let line = r#"type "C:\Program Files\a b.txt" > "%TEMP%\out x.txt""#;
+    let b = build_command_in(Some(line), Some(&shell), false, false);
+    let tail = b.get_raw_tail().unwrap().to_string_lossy().into_owned();
+    assert_eq!(tail, format!("\"{line}\""));
+    assert!(!tail.contains("\\\""), "{tail}");
+}
+
+/// The real thing: cmd runs a quoted line and expands %VAR% in it.
+#[cfg(windows)]
+#[test]
+fn cmd_runs_a_quoted_line_with_variables() {
+    let dir = std::env::temp_dir().join("psmux cmd line test");
+    let _ = std::fs::create_dir_all(&dir);
+    let out = dir.join("out file.txt");
+    let _ = std::fs::remove_file(&out);
+    let line = format!(r#"echo [%OS%] "two words" > "{}""#, out.display());
+    let mut c = std::process::Command::new(cmd_exe());
+    {
+        use std::os::windows::process::CommandExt;
+        c.raw_arg("/S /C").raw_arg(format!("\"{line}\""));
+    }
+    let st = c.status().expect("run cmd");
+    assert!(st.success());
+    let text = std::fs::read_to_string(&out).expect("cmd wrote the file");
+    assert_eq!(text.trim(), r#"[Windows_NT] "two words""#);
+    let _ = std::fs::remove_file(&out);
 }
 
 #[cfg(windows)]

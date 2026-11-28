@@ -247,6 +247,12 @@ pub struct CommandBuilder {
     #[cfg(unix)]
     pub(crate) umask: Option<libc::mode_t>,
     controlling_tty: bool,
+    /// Windows only: text appended to the command line exactly as given,
+    /// after the quoted arguments. For programs that read their own command
+    /// line rather than argv, such as `cmd.exe /S /C "<line>"`, where the
+    /// CommandLineToArgvW `\"` escapes would reach the program literally.
+    #[cfg_attr(feature = "serde_support", serde(default))]
+    raw_tail: Option<OsString>,
 }
 
 impl CommandBuilder {
@@ -260,6 +266,7 @@ impl CommandBuilder {
             #[cfg(unix)]
             umask: None,
             controlling_tty: true,
+            raw_tail: None,
         }
     }
 
@@ -272,6 +279,7 @@ impl CommandBuilder {
             #[cfg(unix)]
             umask: None,
             controlling_tty: true,
+            raw_tail: None,
         }
     }
 
@@ -299,6 +307,7 @@ impl CommandBuilder {
             #[cfg(unix)]
             umask: None,
             controlling_tty: true,
+            raw_tail: None,
         }
     }
 
@@ -329,6 +338,17 @@ impl CommandBuilder {
 
     pub fn get_argv(&self) -> &Vec<OsString> {
         &self.args
+    }
+
+    /// Append `tail` to the Windows command line verbatim, after the quoted
+    /// arguments: no quoting and no escaping. The caller owns its syntax.
+    /// Ignored on other platforms, where programs receive argv.
+    pub fn raw_arg_tail<S: AsRef<OsStr>>(&mut self, tail: S) {
+        self.raw_tail = Some(tail.as_ref().to_owned());
+    }
+
+    pub fn get_raw_tail(&self) -> Option<&OsStr> {
+        self.raw_tail.as_deref()
     }
 
     pub fn get_argv_mut(&mut self) -> &mut Vec<OsString> {
@@ -756,6 +776,15 @@ impl CommandBuilder {
             );
             Self::append_quoted(arg, &mut cmdline);
         }
+        if let Some(tail) = self.raw_tail.as_ref() {
+            anyhow::ensure!(
+                !tail.encode_wide().any(|c| c == 0),
+                "invalid encoding for raw command line tail {:?}",
+                tail
+            );
+            cmdline.push(' ' as u16);
+            cmdline.extend(tail.encode_wide());
+        }
         // Ensure that the command line is nul terminated too!
         cmdline.push(0);
         Ok((exe, cmdline))
@@ -829,3 +858,32 @@ mod tests_issue167_envblock;
 #[cfg(test)]
 #[path = "../../../tests-rs/test_issue773_registry_fill.rs"]
 mod tests_issue773_registry_fill;
+
+#[cfg(all(test, windows))]
+mod raw_tail_tests {
+    use super::*;
+
+    fn line_of(b: &CommandBuilder) -> String {
+        let (_, mut w) = b.cmdline().unwrap();
+        assert_eq!(w.pop(), Some(0));
+        String::from_utf16(&w).unwrap()
+    }
+
+    #[test]
+    fn raw_tail_is_written_verbatim_after_the_quoted_args() {
+        let mut b = CommandBuilder::new(r"C:\Windows\System32\cmd.exe");
+        b.args(["/S", "/C"]);
+        b.raw_arg_tail(r#""type "C:\a b.txt" & echo %OS%""#);
+        assert_eq!(
+            line_of(&b),
+            r#"C:\Windows\System32\cmd.exe /S /C "type "C:\a b.txt" & echo %OS%""#
+        );
+    }
+
+    #[test]
+    fn no_raw_tail_leaves_the_command_line_as_before() {
+        let mut b = CommandBuilder::new(r"C:\Windows\System32\cmd.exe");
+        b.args(["/C", r#"say "hi""#]);
+        assert_eq!(line_of(&b), r#"C:\Windows\System32\cmd.exe /C "say \"hi\"""#);
+    }
+}

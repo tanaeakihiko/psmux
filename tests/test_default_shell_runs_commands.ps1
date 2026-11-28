@@ -96,6 +96,25 @@ if ($haveBash) {
     Test-Case 'F SHELL=Git Bash, default-shell unset' $bash '' '' 'bash'
 } else { Write-Skip 'C to F: Git Bash not installed' }
 
+Write-Host "`n=== H: a quoted cmd command reaches cmd unescaped ===" -ForegroundColor Cyan
+# cmd reads its own command line; a quote used to arrive as a \" escape and
+# the command failed ("The filename, directory name, or volume label syntax
+# is incorrect").
+$ns = Start-Case '' ''
+try {
+    & $PSMUX -L $ns set -g default-shell $cmd | Out-Null
+    $out = Join-Path $tmp 'quoted out.txt'
+    $line = "echo [%OS%] `"two words`" > `"$out`""
+    $p = (& $PSMUX -L $ns split-window -d -t d:0 -P -F '#{pane_id}' $line 2>&1 | Out-String).Trim()
+    for ($i = 0; $i -lt 40 -and -not (Test-Path $out); $i++) { Start-Sleep -Milliseconds 250 }
+    $got = if (Test-Path $out) { (Get-Content $out -Raw).Trim() } else { '' }
+    if ($got -eq '[Windows_NT] "two words"') { Write-Pass "H: cmd ran the quoted line and expanded %OS%" }
+    else {
+        $pane = (& $PSMUX -L $ns capture-pane -p -S - -t $p 2>&1 | Out-String).Trim()
+        Write-Fail "H: file has [$got]; pane: $pane"
+    }
+} finally { & $PSMUX -L $ns kill-server 2>$null | Out-Null }
+
 Write-Host "`n=== G: the cat placeholder follows default-shell ===" -ForegroundColor Cyan
 if ($haveBash) {
     $ns = Start-Case '' ''

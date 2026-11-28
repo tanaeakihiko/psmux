@@ -34,7 +34,9 @@ fn unset_default_shell_empty_popup_is_the_pane_shell() {
 fn cmd_default_shell_runs_the_popup_command_in_cmd() {
     let a = argv(&popup_command_builder("echo %OS% & pause", &cmd_exe()));
     assert!(a[0].to_ascii_lowercase().ends_with("cmd.exe"), "{a:?}");
-    assert_eq!(&a[1..], ["/C", "echo %OS% & pause"], "{a:?}");
+    assert_eq!(&a[1..], ["/S", "/C"], "{a:?}");
+    let b = popup_command_builder("echo %OS% & pause", &cmd_exe());
+    assert_eq!(b.get_raw_tail().map(|t| t.to_string_lossy().into_owned()).as_deref(), Some("\"echo %OS% & pause\""));
 }
 
 #[cfg(windows)]

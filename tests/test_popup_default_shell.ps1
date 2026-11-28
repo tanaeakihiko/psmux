@@ -80,11 +80,17 @@ function Test-Probe([string]$label, [string]$want) {
 }
 
 function Test-Empty([string]$label, [string]$wantImage) {
+    # A default-shell change makes the warm pool start a spare of the new
+    # shell; let that settle, then count only processes that appear once the
+    # popup opens.
+    Start-Sleep -Seconds 4
+    $known = @{}
+    foreach ($d in Get-Descendants $script:serverPid) { $known[[int]$d.ProcessId] = $true }
     $p = Start-Process -FilePath $PSMUX -ArgumentList "-L $NS display-popup -t $S" -WindowStyle Hidden -PassThru
     $started.Add($p.Id)
     if (-not (Wait-PopupActive $true)) { Write-Fail "${label}: the popup did not open"; return }
     Start-Sleep -Seconds 2
-    $names = @(Get-Descendants $script:serverPid | Where-Object { $_.CreationDate -ge $script:before } | ForEach-Object { $_.Name.ToLower() })
+    $names = @(Get-Descendants $script:serverPid | Where-Object { -not $known.ContainsKey([int]$_.ProcessId) } | ForEach-Object { $_.Name.ToLower() })
     & $PSMUX -L $NS display-popup -t $S -C 2>&1 | Out-Null
     [void](Wait-PopupActive $false 3000)
     if ($names -contains $wantImage) { Write-Pass "${label}: the empty popup runs $wantImage" }
@@ -116,11 +122,9 @@ try {
 
     Write-Host "`n=== an empty popup opens default-shell ===" -ForegroundColor Cyan
     & $PSMUX -L $NS set -g default-shell $cmdExe | Out-Null
-    $script:before = Get-Date
     Test-Empty 'D default-shell cmd' 'cmd.exe'
     & $PSMUX -L $NS set -gu default-shell | Out-Null
     $shown = (& $PSMUX -L $NS show -gv default-shell 2>&1 | Out-String).Trim()
-    $script:before = Get-Date
     $wantImg = ([IO.Path]::GetFileName($shown)).ToLower()
     if (-not $wantImg.EndsWith('.exe')) { $wantImg += '.exe' }
     Test-Empty "E default-shell unset (shows $shown)" $wantImg

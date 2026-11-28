@@ -4110,6 +4110,8 @@ pub fn build_command_in(command: Option<&str>, shell: Option<&str>, env_shim: bo
                     builder.args(["-NoLogo", "-Command", &cmd]);
                 } else if matches!(stem.as_str(), "bash" | "sh" | "zsh" | "fish" | "dash" | "ash") {
                     builder.args(["-c", &cmd]);
+                } else if stem == "cmd" {
+                    cmd_line_args(&mut builder, &cmd);
                 } else {
                     builder.args(["/C", &cmd]);
                 }
@@ -4367,6 +4369,22 @@ pub fn build_raw_command(raw_args: &[String]) -> CommandBuilder {
         return build_command(None, true, false);
     }
     build_argv_command(raw_args, true, false)
+}
+
+/// Hand a command string to cmd.exe the way cmd reads it: `/S /C "<line>"`
+/// written into the command line verbatim. cmd parses its own command line;
+/// as an ordinary argument the line got CommandLineToArgvW `\"` escapes that
+/// cmd reads literally, so any quote in it broke the command (`type "C:\a b"`
+/// failed with "The filename, directory name, or volume label syntax is
+/// incorrect"). `/S` makes cmd drop exactly the outer pair of quotes, so
+/// what runs is the line as written, `%VAR%` expansion included. A line
+/// without quotes reaches cmd the same as the old `/C "<line>"`.
+#[cfg(windows)]
+pub(crate) fn cmd_line_args(builder: &mut CommandBuilder, line: &str) {
+    // A line break ends a cmd command line.
+    let line = line.replace(['\r', '\n'], " ");
+    builder.args(["/S", "/C"]);
+    builder.raw_arg_tail(format!("\"{line}\""));
 }
 
 /// The variable a batch script's command line rides in to cmd.exe (#794).
