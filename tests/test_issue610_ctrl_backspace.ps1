@@ -25,6 +25,18 @@ function Write-Pass($msg) { Write-Host "  [PASS] $msg" -ForegroundColor Green; $
 function Write-Fail($msg) { Write-Host "  [FAIL] $msg" -ForegroundColor Red; $script:TestsFailed++ }
 function Write-Skip($msg) { Write-Host "  [SKIP] $msg" -ForegroundColor DarkGray }
 
+# A pane program that keeps the console's ENABLE_MOUSE_INPUT gets mouse
+# events from psmux (#597, #1092), and on OpenConsole a VT input program gets
+# them as SGR reports (ESC [ < b ; x ; y M or m). In a VM the pointer resting
+# over the attached client's window puts motion reports between the keys
+# (seen in test_issue860_ctrl_bracket_space.ps1 on 19045 with OpenConsole
+# 1.24). No check here is about the mouse, so they are taken out of the
+# logged bytes (hex, either case) first.
+function Drop-MouseReports([string]$hex) {
+    $s = [regex]::Replace(' ' + $hex + ' ', '(?i) 1b 5b 3c(?: 3[0-9b])+ (?:4d|6d)(?= )', '')
+    $s.Trim()
+}
+
 $emptyConf = "$env:TEMP\psmux_610_empty.conf"
 "" | Set-Content -Path $emptyConf -Encoding ASCII
 
@@ -287,7 +299,7 @@ if (-not $node) {
                 $bytes += ($Matches[1].Trim() -split '\s+')
             }
         }
-        $stream = ($bytes -join ' ')
+        $stream = Drop-MouseReports ($bytes -join ' ')
         if ($stream -match '31 7f') {
             Write-Pass "node pane got 7f for plain Backspace (regression guard) [$stream]"
         } else {
@@ -363,7 +375,7 @@ $ExtraEnv
     foreach ($l in (Get-Content $log -EA SilentlyContinue)) {
         if ($l -match 'hex=\[ ([0-9A-Fa-f ]+) \]') { $b += ($Matches[1].Trim() -split '\s+') }
     }
-    $stream = ($b -join ' ').ToUpper()
+    $stream = (Drop-MouseReports ($b -join ' ')).ToUpper()
     foreach ($c in @(
         @{ mk='31'; want='7F'; n='plain Backspace' },
         @{ mk='32'; want='08'; n='Ctrl+Backspace' },

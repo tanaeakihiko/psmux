@@ -42,6 +42,18 @@ function Write-Pass($msg) { Write-Host "  [PASS] $msg" -ForegroundColor Green; $
 function Write-Fail($msg) { Write-Host "  [FAIL] $msg" -ForegroundColor Red; $script:TestsFailed++ }
 function Write-Skip($msg) { Write-Host "  [SKIP] $msg" -ForegroundColor DarkGray }
 
+# A pane program that keeps the console's ENABLE_MOUSE_INPUT gets mouse
+# events from psmux (#597, #1092), and on OpenConsole a VT input program gets
+# them as SGR reports (ESC [ < b ; x ; y M or m). In a VM the pointer resting
+# over the attached client's window puts motion reports between the keys
+# (seen in test_issue860_ctrl_bracket_space.ps1 on 19045 with OpenConsole
+# 1.24). No check here is about the mouse, so they are taken out of the
+# logged bytes (hex, either case) first.
+function Drop-MouseReports([string]$hex) {
+    $s = [regex]::Replace(' ' + $hex + ' ', '(?i) 1b 5b 3c(?: 3[0-9b])+ (?:4d|6d)(?= )', '')
+    $s.Trim()
+}
+
 $emptyConf = "$env:TEMP\psmux_611_empty.conf"
 "" | Set-Content -Path $emptyConf -Encoding ASCII
 
@@ -227,7 +239,7 @@ if (-not $node) {
             foreach ($l in (Get-Content $nlog -EA SilentlyContinue)) {
                 if ($l -match 'hex=\[ ([0-9a-f ]+) \]') { $bytes += ($Matches[1].Trim() -split '\s+') }
             }
-            $stream = ($bytes -join ' ')
+            $stream = Drop-MouseReports ($bytes -join ' ')
             foreach ($c in $cases) {
                 $mk = "{0:x2}" -f ([int][char]$c.m)
                 if ($stream -match ($mk + ' ' + $c.want + '(\s|$)')) {
@@ -243,7 +255,8 @@ if (-not $node) {
             $reads = @()
             foreach ($l in (Get-Content $nlog -EA SilentlyContinue)) {
                 if ($l -match '^(\d+) BYTES hex=\[ ([0-9a-f ]+) \]') {
-                    $reads += @{ t = [int]$Matches[1]; hex = $Matches[2].Trim() }
+                    $h = Drop-MouseReports $Matches[2].Trim()
+                    if ($h) { $reads += @{ t = [int]$Matches[1]; hex = $h } }
                 }
             }
             $atomic = @($reads | Where-Object { $_.hex -eq '1b 0d' })
@@ -270,7 +283,7 @@ if (-not $node) {
             foreach ($l in (Get-Content $nlog -EA SilentlyContinue)) {
                 if ($l -match 'hex=\[ ([0-9a-f ]+) \]') { $bytes += ($Matches[1].Trim() -split '\s+') }
             }
-            $stream = ($bytes -join ' ')
+            $stream = Drop-MouseReports ($bytes -join ' ')
             if ($stream -match '39 1b(\s|$)') {
                 Write-Pass "a lone Escape still reaches the pane exactly once after its window"
             } else {
