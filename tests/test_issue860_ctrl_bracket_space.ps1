@@ -76,13 +76,22 @@ end, 10)
 
 function Kill-Ns { & $PSMUX -L $NS kill-server 2>&1 | Out-Null; Start-Sleep -Milliseconds 400 }
 
-# The byte STREAM a VT reading pane logged, as upper case hex separated by spaces.
+# The byte STREAM a VT reading pane logged, as upper case hex separated by
+# spaces, with SGR mouse reports (ESC [ < b ; x ; y M or m) taken out.
+# The logger keeps the console's ENABLE_MOUSE_INPUT, so psmux forwards mouse
+# events to it (#597, #1092), and on OpenConsole a VT input program gets them
+# as that text. In a VM the pointer resting over the attached client's
+# window sends motion reports (ESC[<35;90;18M) between the keys, measured on
+# 19045 with OpenConsole 1.24 in 3 of 3 runs; no check here is about the
+# mouse, so they are dropped before the byte checks.
 function Stream($log) {
     $b = @()
     foreach ($l in (Get-Content $log -EA SilentlyContinue)) {
         if ($l -match '^BYTES .*hex=\[ ([0-9A-Fa-f ]+) \]') { $b += ($Matches[1].Trim() -split '\s+') }
     }
-    ($b -join ' ').ToUpper()
+    $s = ' ' + ($b -join ' ').ToUpper() + ' '
+    $s = [regex]::Replace($s, ' 1B 5B 3C(?: 3[0-9B])+ (?:4D|6D)(?= )', '')
+    $s.Trim()
 }
 
 # Start an ATTACHED client in its own visible console window running $pane,
