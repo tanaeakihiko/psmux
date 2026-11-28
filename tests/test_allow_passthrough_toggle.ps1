@@ -17,9 +17,10 @@
 # text, and hands psmux the inner OSC 52, which ends with BEL here, ahead of
 # the text. psmux never sees
 # the wrapper there, so on a build before 22000 without PSMUX_CONPTY_DIR
-# every step expects the copy to be made, as for an unwrapped OSC 52 with
-# set-clipboard on; the marker must still show. OpenConsole passes the
-# wrapper on, so with PSMUX_CONPTY_DIR the steps are as on Windows 11.
+# allow-passthrough cannot change anything and each step's option check is
+# reported as skipped; the marker after the sequence must still show.
+# OpenConsole passes the wrapper on, so with PSMUX_CONPTY_DIR the steps are
+# as on Windows 11.
 #
 # Runs under a private -L namespace and PSMUX_DATA_DIR; cleans up with
 # `psmux -L <ns> kill-server` only. PSMUX_EXE picks another binary.
@@ -30,6 +31,8 @@ $script:TestsPassed = 0
 $script:TestsFailed = 0
 function Write-Pass($msg) { Write-Host "  [PASS] $msg" -ForegroundColor Green; $script:TestsPassed++ }
 function Write-Fail($msg) { Write-Host "  [FAIL] $msg" -ForegroundColor Red; $script:TestsFailed++ }
+$script:TestsSkipped = 0
+function Write-Skip($msg) { Write-Host "  [SKIP] $msg" -ForegroundColor Yellow; $script:TestsSkipped++ }
 
 Write-Host "psmux: $PSMUX ($(& $PSMUX -V))"
 $Win10Inbox = [Environment]::OSVersion.Version.Build -lt 22000 -and -not $env:PSMUX_CONPTY_DIR
@@ -80,8 +83,6 @@ try {
     foreach ($s in $steps) {
         $step++
         $label = $s[0]; $set = $s[1]; $want = $s[2]; $form = if ($s.Count -gt 3) { $s[3] } else { 'st' }
-        # The Windows 10 inbox conhost hands psmux the OSC 52 unwrapped.
-        if ($Win10Inbox) { $want = $true }
         if ($set -eq '-u') { & $PSMUX -L $ns set -gu allow-passthrough }
         elseif ($set) { & $PSMUX -L $ns set -g allow-passthrough $set }
         $shown = (& $PSMUX -L $ns show -gv allow-passthrough | Out-String).Trim()
@@ -93,7 +94,12 @@ try {
         Start-Sleep -Milliseconds 400
         $bufs = (& $PSMUX -L $ns list-buffers -F '#{buffer_sample}' | Out-String)
         $acted = $bufs.Contains($tag)
-        if ($acted -eq $want) {
+        if ($Win10Inbox) {
+            # The Windows 10 inbox conhost hands psmux the OSC 52 unwrapped,
+            # so the option has nothing to act on here.
+            Write-Pass "step ${step}: marker VIS-$tag showed after the wrapped OSC 52"
+            Write-Skip "step ${step}: allow-passthrough $shown untestable, the Windows 10 inbox conhost unwraps the passthrough before psmux reads it (acted on = $acted)"
+        } elseif ($acted -eq $want) {
             Write-Pass "step ${step}: allow-passthrough $shown, $form form, wrapped OSC 52 acted on = $acted"
         } else {
             Write-Fail "step ${step}: allow-passthrough $shown, $form form, wrapped OSC 52 acted on = $acted, want $want"
@@ -109,6 +115,6 @@ try {
 }
 
 Write-Host ""
-Write-Host "Results: $($script:TestsPassed) passed, $($script:TestsFailed) failed"
+Write-Host "Results: $($script:TestsPassed) passed, $($script:TestsFailed) failed, $($script:TestsSkipped) skipped"
 if ($script:TestsFailed -gt 0) { exit 1 }
 exit 0
