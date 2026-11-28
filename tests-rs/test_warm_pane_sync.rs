@@ -286,6 +286,8 @@ fn post_config_predictions_respawn() {
 
 #[test]
 fn post_config_history_limit_only_returns_patch() {
+    // Compared with a user's fresh server, whatever the suite's PSMUX_NO_WARM.
+    let _env = crate::util::pristine_warm_env();
     let mut app = fresh_app();
     app.history_limit = 100_000;
     match for_post_config(&app) {
@@ -296,12 +298,16 @@ fn post_config_history_limit_only_returns_patch() {
 
 #[test]
 fn post_config_default_state_is_noop() {
+    // Compared with a user's fresh server, whatever the suite's PSMUX_NO_WARM.
+    let _env = crate::util::pristine_warm_env();
     let app = fresh_app();
     assert!(matches!(for_post_config(&app), WarmPaneSync::Noop));
 }
 
 #[test]
 fn post_config_skips_implicit_psmux_env() {
+    // Compared with a user's fresh server, whatever the suite's PSMUX_NO_WARM.
+    let _env = crate::util::pristine_warm_env();
     // PSMUX_TARGET_SESSION / TMUX / TMUX_PANE are server-internal and
     // must not trigger a respawn — they are set on every spawn anyway.
     let mut app = fresh_app();

@@ -58,8 +58,11 @@ struct PristineCursorEnv {
 impl PristineCursorEnv {
     fn take() -> Self {
         let lock = crate::util::lock_test_env();
+        // The warm pool variables too (crate::util::WARM_ENV_VARS): with
+        // PSMUX_NO_WARM=1 a fresh AppState has warm off and the pool at 0.
         let saved = ["PSMUX_CURSOR_STYLE", "PSMUX_CURSOR_BLINK"]
             .into_iter()
+            .chain(crate::util::WARM_ENV_VARS)
             .map(|name| {
                 let previous = std::env::var(name).ok();
                 std::env::remove_var(name);

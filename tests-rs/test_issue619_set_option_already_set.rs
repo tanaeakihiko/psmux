@@ -285,6 +285,9 @@ fn probe_value(def: &crate::server::option_catalog::OptionDef) -> String {
 #[test]
 fn unset_restores_the_fresh_server_value_for_every_catalog_option() {
     let _lock = crate::util::lock_test_env();
+    // A user's fresh server, whatever the suite's PSMUX_NO_WARM (dropped
+    // before the lock: declared after it).
+    let _warm = crate::util::WarmEnvCleared::clear();
     let fresh = mock_app();
 
     let mut broken: Vec<String> = Vec::new();

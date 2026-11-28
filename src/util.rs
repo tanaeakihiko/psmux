@@ -20,6 +20,58 @@ pub(crate) fn lock_test_env() -> std::sync::MutexGuard<'static, ()> {
     TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The variables that change a fresh `AppState`'s warm pool (`PSMUX_NO_WARM`
+/// turns it off, `PSMUX_WARM_POOL_SIZE` sets its depth). A test that compares
+/// a fresh server's defaults would otherwise pass or fail on how the suite was
+/// started: run with PSMUX_NO_WARM=1, as psmux's own test runners set it, six
+/// of them failed every time.
+#[cfg(test)]
+pub(crate) const WARM_ENV_VARS: [&str; 2] = ["PSMUX_NO_WARM", "PSMUX_WARM_POOL_SIZE"];
+
+/// Clears `WARM_ENV_VARS` and puts them back on drop. The caller must hold
+/// `lock_test_env` for as long as this lives (see `pristine_warm_env` for a
+/// guard that takes it).
+#[cfg(test)]
+pub(crate) struct WarmEnvCleared(Vec<(&'static str, Option<String>)>);
+
+#[cfg(test)]
+impl WarmEnvCleared {
+    pub(crate) fn clear() -> Self {
+        WarmEnvCleared(WARM_ENV_VARS.into_iter().map(|name| {
+            let previous = std::env::var(name).ok();
+            std::env::remove_var(name);
+            (name, previous)
+        }).collect())
+    }
+}
+
+#[cfg(test)]
+impl Drop for WarmEnvCleared {
+    fn drop(&mut self) {
+        for (name, previous) in &self.0 {
+            match previous {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
+/// `lock_test_env` plus `WarmEnvCleared`: a fresh `AppState` built while this
+/// lives has the warm pool a user's server gets, whatever the suite's env.
+/// Fields drop in order, so the variables are back before the lock goes.
+#[cfg(test)]
+pub(crate) struct PristineWarmEnv {
+    _cleared: WarmEnvCleared,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+pub(crate) fn pristine_warm_env() -> PristineWarmEnv {
+    let lock = lock_test_env();
+    PristineWarmEnv { _cleared: WarmEnvCleared::clear(), _lock: lock }
+}
+
 /// The pty a pane fixture needs when no process is ever going to use it.
 ///
 /// A fixture that only has to hand `Pane` a master, a writer and a child used

@@ -129,6 +129,8 @@ fn warm_server_is_disabled_when_warm_enabled_is_false() {
 
 #[test]
 fn warm_server_is_allowed_for_normal_sessions() {
+    // A user's fresh server, whatever the suite's PSMUX_NO_WARM.
+    let _env = crate::util::pristine_warm_env();
     let app = AppState::new("demo".to_string());
     assert!(should_spawn_warm_server(&app));
 }
