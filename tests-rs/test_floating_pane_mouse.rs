@@ -321,3 +321,25 @@ fn the_client_hits_the_front_float_first() {
     let bare = vec![float_json(4, 20, 5, "none")];
     assert_eq!(float_under(area, &bare, 20, 6), FloatUnder::Inside { id: 4, wants_mouse: false, col: 0, row: 0 });
 }
+
+// ── The horizontal wheel ───────────────────────────────────────────────────
+
+#[test]
+fn a_horizontal_notch_over_a_float_goes_to_the_float_not_the_active_tiled_pane() {
+    // tmux MouseDown6Pane / MouseDown7Pane, unbound: `send -M` to the pane
+    // under the pointer. handle_pane_hwheel forwarded every notch to the
+    // active tiled pane, so a float's notch reached the program under it.
+    // The float branch takes the float ids and only them.
+    let Some((mut app, t, a, b)) = rig() else { return };
+    app.mouse_enabled = true;
+    assert!(forward_wheel_button_to_float(&mut app, a, 67, Some((3, 2))));
+    assert!(forward_wheel_button_to_float(&mut app, b, 66, Some((0, 0))));
+    assert!(!forward_wheel_button_to_float(&mut app, t, 67, Some((3, 2))), "a tiled pane is not a float");
+    assert!(!forward_wheel_button_to_float(&mut app, 999, 67, None));
+    assert!(!forward_wheel_button_to_float(&mut app, a, 64, None), "not a horizontal button");
+    // And through the server's entry point the focus stays where it was.
+    assert!(!handle_pane_hwheel(&mut app, a, true, Some((3, 2)), 0));
+    assert_eq!(focused(&app), None, "the notch over A must not take the focus");
+    let w = &app.windows[0];
+    assert_eq!(crate::tree::get_active_pane_id(&w.root, &w.active_path), Some(t));
+}

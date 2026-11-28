@@ -9177,8 +9177,16 @@ pub fn run_remote(terminal: &mut Terminal<crate::platform::PsmuxBackend>, input:
                             // MouseDown7Pane, resolved by the server. Never a
                             // scroll; outside a pane there is nothing to do.
                             MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
-                                // Not for the tiled pane under a floating pane.
-                                if float_under(client_content_area, &srv_floats, me.column, me.row) != FloatUnder::None {
+                                // Over a floating pane the notch is its own, as the
+                                // vertical wheel is (the server hands it to the
+                                // program); on its border nothing, and never the
+                                // tiled pane under it.
+                                let over_float = float_under(client_content_area, &srv_floats, me.column, me.row);
+                                if let FloatUnder::Inside { id, col, row, .. } = over_float {
+                                    let dir = if me.kind == MouseEventKind::ScrollRight { "right" } else { "left" };
+                                    cmd_batch.push(format!("pane-hwheel {} {} {} {} {}\n", id, dir, col, row,
+                                        crate::mouse_keys::sgr_mod_bits(me.modifiers)));
+                                } else if over_float != FloatUnder::None {
                                 } else if let Some(&(pane_id, pane_rect)) = client_pane_rects.iter().find(|(_, r)| {
                                     r.contains(ratatui::layout::Position { x: me.column, y: me.row })
                                 }) {

@@ -2613,6 +2613,12 @@ pub fn handle_pane_hwheel(app: &mut AppState, pane_id: usize, right: bool, at: O
             if crate::copy_mode::close_clock_of(app, pane_id) {
                 return true;
             }
+            // A floating pane's program gets the notch when it asked for the
+            // mouse, as handle_pane_wheel does for the vertical wheel; the
+            // focus stays where it is (tmux `send -M` selects nothing).
+            if forward_wheel_button_to_float(app, pane_id, btn, at) {
+                return false;
+            }
             focus_pane_by_id(app, pane_id);
             forward_wheel_button_to_active_pane(app, btn, at);
         }
@@ -3027,6 +3033,23 @@ fn forward_wheel_to_active_pane(app: &mut AppState, up: bool, at: Option<(i16, i
     let (col, row) = at.unwrap_or((5, 5));
     inject_mouse_combined(pane, col, row, sgr_btn, true,
         button_state, mouse_inject::MOUSE_WHEELED, &win_name);
+}
+
+/// `forward_wheel_button_to_active_pane` for floating pane `pane_id` of the
+/// active window: SGR 66/67 and a MOUSE_HWHEELED record to its program when
+/// it asked for the mouse. Returns false when `pane_id` is not such a float.
+fn forward_wheel_button_to_float(app: &mut AppState, pane_id: usize, btn: u8, at: Option<(i16, i16)>) -> bool {
+    let Some((button_state, flags)) = hwheel_record(btn) else { return false };
+    let win = &mut app.windows[app.active_idx];
+    let win_name = win.name.clone();
+    let Some(fp) = win.floating.iter_mut().find(|fp| fp.id == pane_id) else { return false };
+    if pane_takes_wheel(&mut fp.pane) {
+        let (col, row) = at.unwrap_or((0, 0));
+        inject_mouse_combined(&mut fp.pane, col, row, btn, true, button_state, flags, &win_name);
+    } else {
+        mouse_log("  -> horizontal wheel over a floating pane with no mouse reporting: nothing (tmux parity)");
+    }
+    true
 }
 
 /// The horizontal sibling of `forward_wheel_to_active_pane`: SGR 66/67 (with
