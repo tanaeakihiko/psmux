@@ -90,7 +90,30 @@ function Install-FarmGuest {
             Copy-Item $f.FullName -Destination "C:\vmfarm-installers\$($f.Name)" -ToSession $s -Force
         }
         Copy-Item (Join-Path $PSScriptRoot 'guest\Install-Tools.ps1') -Destination 'C:\vmfarm-installers\Install-Tools.ps1' -ToSession $s -Force
-        Invoke-Command -Session $s -ScriptBlock { param($skip) & C:\vmfarm-installers\Install-Tools.ps1 -SkipSshServer:$skip } -ArgumentList ([bool]$SkipSshServer)
+        # As SYSTEM through a scheduled task, not inside the PowerShell Direct
+        # session: the OpenSSH Server capability install ends the session's host
+        # process ("The Hyper-V socket target process has ended"), measured on
+        # two of five Windows 11 guests.
+        Invoke-Command -Session $s -ArgumentList ([bool]$SkipSshServer) -ScriptBlock {
+            param($skip)
+            Remove-Item C:\vmfarm-install.log -ErrorAction SilentlyContinue
+            $a = '-NoProfile -ExecutionPolicy Bypass -File C:\vmfarm-installers\Install-Tools.ps1' + $(if ($skip) { ' -SkipSshServer' } else { '' })
+            $act = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $a
+            $pri = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+            Register-ScheduledTask -TaskName 'vmfarm-tools' -Action $act -Principal $pri -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero)) -Force | Out-Null
+            Start-ScheduledTask -TaskName 'vmfarm-tools'
+        }
+        Remove-PSSession $s
+        $deadline = (Get-Date).AddMinutes(45); $last = ''
+        while ($true) {
+            Start-Sleep -Seconds 15
+            try { $last = Invoke-Command -VMName $Name -Credential (Get-FarmCredential) -ErrorAction Stop { Get-Content C:\vmfarm-install.log -Tail 1 -ErrorAction SilentlyContinue } } catch { }
+            if ($last -match 'tools done') { break }
+            if ($last -match 'tools FAILED') { throw "[$Name] $last" }
+            if ((Get-Date) -gt $deadline) { throw "[$Name] tool install timed out; last log line: $last" }
+        }
+        $s = New-FarmSession $Name
+        Invoke-Command -Session $s { Unregister-ScheduledTask -TaskName 'vmfarm-tools' -Confirm:$false -ErrorAction SilentlyContinue }
         # The OpenConsole fixture some suites use, at the path they expect.
         $occ = Join-Path $env:TEMP 'occ-conpty\nugetstable'
         if (Test-Path $occ) {
@@ -131,7 +154,9 @@ function Update-FarmGuest {
         if ($state -like 'error*') { throw "update failed on ${Name}: $state" }
         if ($state -eq 'done') { return }
         if ($state -eq 'reboot') {
-            Restart-VM -Name $Name -Force -Wait -For Heartbeat
+            # No -Wait: applying an LCU at boot takes far longer than its timeout.
+            Restart-VM -Name $Name -Force
+            Start-Sleep -Seconds 60
             Wait-FarmGuest -Name $Name -TimeoutSec 3600 | Out-Null
         }
     }

@@ -11,6 +11,8 @@ $ErrorActionPreference = 'Stop'
 $log = 'C:\vmfarm-install.log'
 function Note($m) { $l = "[{0}] {1}" -f (Get-Date -Format s), $m; Add-Content -Path $log -Value $l; Write-Host $l }
 
+trap { Note "tools FAILED: $_"; exit 1 }
+
 function Add-MachinePath([string]$dir) {
     $p = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     if (($p -split ';') -notcontains $dir) {
@@ -36,7 +38,7 @@ if ($f = Find 'PowerShell-*-win-x64.zip') {
     Note "pwsh $((Get-Item "$dest\pwsh.exe").VersionInfo.ProductVersion)"
 }
 # Git for Windows (Git Bash, ssh, less, perl).
-if ($f = Find 'Git-*-64-bit.exe') {
+if ((-not (Test-Path 'C:\Program Files\Git\cmd\git.exe')) -and ($f = Find 'Git-*-64-bit.exe')) {
     Run $f.FullName @('/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-', '/SUPPRESSMSGBOXES', '/CLOSEAPPLICATIONS')
     Note "git $((Get-Item 'C:\Program Files\Git\cmd\git.exe').VersionInfo.ProductVersion)"
 }
@@ -44,8 +46,10 @@ if ($f = Find 'Git-*-64-bit.exe') {
 if ($f = Find 'python-*-amd64.exe') {
     $ver = ($f.BaseName -replace '^python-', '' -replace '-amd64$', '').Split('.')
     $target = "C:\Python$($ver[0])$($ver[1])"
+    # Re-running the bundle over an existing install fails (1601) under SYSTEM.
+    if (Test-Path "$target\python.exe") { Note "python already in $target" } else {
     Run $f.FullName @('/quiet', 'InstallAllUsers=1', 'PrependPath=1', 'Include_test=0', "TargetDir=$target")
-    Note "python in $target"
+    Note "python in $target" }
 }
 foreach ($msi in 'nvim-win64.msi', 'node-v*-x64.msi', 'Alacritty-*-installer.msi') {
     if ($f = Find $msi) { Run 'msiexec.exe' @('/i', "`"$($f.FullName)`"", '/qn', '/norestart'); Note "installed $($f.Name)" }
