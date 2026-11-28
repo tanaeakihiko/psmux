@@ -126,11 +126,6 @@ function Enter-Parked {
     Start-Sleep -Milliseconds 300
 }
 
-function Expected($scroll) {
-    $first = 196 - $scroll
-    (($first..($first + 2)) | ForEach-Object { "LINE{0:D3}" -f $_ }) -join ","
-}
-
 function Select-Three-With-Keys {
     & $keyExe $client.Id "V" | Out-Null; Start-Sleep -Milliseconds 300
     & $keyExe $client.Id "j" | Out-Null; Start-Sleep -Milliseconds 250
@@ -153,9 +148,14 @@ foreach ($notches in @(1, 3)) {
         continue
     }
     Write-Info "$notches notch(es) scrolled the view to offset $scroll"
+    # The wheel runs scroll-up, which with vi keys keeps the cursor on its line
+    # as the view moves (tmux window_copy_cursor_up with scroll_only) until it
+    # reaches the last row, so the selection starts on whatever row the cursor
+    # is on now: screen row r at offset s holds LINE(202 - height + r - s).
+    $first = 202 - [int]$after.rows + [int]$after.copy_cursor_row - $scroll
+    $want = (($first..($first + 2)) | ForEach-Object { "LINE{0:D3}" -f $_ }) -join ","
     Select-Three-With-Keys
     $got = Get-Buffer
-    $want = Expected $scroll
     if ($got -eq $want) { Write-Pass "wheel x$notches (offset $scroll) then V j j Enter copied [$got]" }
     else { Write-Fail "wheel x$notches (offset $scroll) copied [$got], want [$want]" }
 }
@@ -186,10 +186,12 @@ if (-not $l -or -not $l.copy_mode) {
         Start-Sleep -Milliseconds 400
         $l = Get-Leaf
         $scroll = [int]$l.scroll_offset
-        # The click parked the cursor on a known screen row, so the three lines
-        # under it follow from the row, the offset and the pane height: the
-        # bottom row holds the shell prompt, the one above it holds LINE200, so
-        # screen row r at offset s holds LINE(202 - height + r - s).
+        # scroll-up keeps the cursor on its line with vi keys, so read its row
+        # after the scroll. The three lines under it follow from the row, the
+        # offset and the pane height: the bottom row holds the shell prompt,
+        # the one above it holds LINE200, so screen row r at offset s holds
+        # LINE(202 - height + r - s).
+        $row = [int]$l.copy_cursor_row
         $height = [int]$l.rows
         $first = 202 - $height + $row - $scroll
         $want = (($first..($first + 2)) | ForEach-Object { "LINE{0:D3}" -f $_ }) -join ","

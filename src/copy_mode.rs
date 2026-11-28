@@ -1186,9 +1186,10 @@ pub fn scroll_pane_scrollback(app: &mut AppState, lines: usize, up: bool) {
 /// `scroll-up` (and the wheel, which runs it), tmux's
 /// window_copy_cmd_scroll_up: `lines` steps up in the history. With a
 /// selection the view scrolls and the cursor is left alone. Otherwise each
-/// step is window_copy_cursor_up with scroll_only: the cursor keeps its
-/// screen row and its column is settled as for any vertical move. At the top
-/// of the history nothing changes.
+/// step is window_copy_cursor_up with scroll_only: vi keys keep the cursor on
+/// its line (it moves down a row as the view moves up, until the last row)
+/// and emacs keys keep it on its screen row, and its column is settled as for
+/// any vertical move. At the top of the history nothing changes.
 pub fn scroll_copy_up(app: &mut AppState, lines: usize) {
     scroll_copy_lines(app, lines, true);
 }
@@ -1207,8 +1208,21 @@ fn scroll_copy_lines(app: &mut AppState, lines: usize, up: bool) {
         scroll_copy_view(app, lines, up);
         return;
     }
+    let vi = app.mode_keys != "emacs";
+    let rows = match active_pane_rows(app) { Some(r) => r, None => return };
     for _ in 0..lines {
-        vertical_move(app, false, |app| scroll_copy_view(app, 1, up));
+        vertical_move(app, false, |app| {
+            if vi {
+                if let Some((r, c)) = app.copy_pos {
+                    if up && r + 1 < rows {
+                        app.copy_pos = Some((r + 1, c));
+                    } else if !up && r > 0 {
+                        app.copy_pos = Some((r - 1, c));
+                    }
+                }
+            }
+            scroll_copy_view(app, 1, up);
+        });
     }
 }
 

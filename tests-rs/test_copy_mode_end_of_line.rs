@@ -499,12 +499,17 @@ fn every_move_lands_where_tmux_puts_it() {
 // scroll-up and scroll-down (the wheel runs them too), tmux's
 // window_copy_cmd_scroll_up and _down: with a selection only the view moves,
 // at either end of the history nothing changes, and otherwise each step is a
-// vertical move in scroll_only mode, with the column settled as for cursor-up
+// vertical move in scroll_only mode, vi keys keeping the cursor on its line
+// and emacs keys on its screen row, with the column settled as for cursor-up
 // and cursor-down. The pane is 80 by 24 with 200
 // numbered lines and "ab"; each case enters copy mode, runs cursor-up five
 // times, then the moves, and expects tmux 3.8's copy_cursor_x,
 // copy_cursor_y and scroll_position.
 const SCROLLS: &[(&str, &str, (u16, u16, usize))] = &[
+    ("vi", "scroll-up scroll-up scroll-up", (1, 21, 3)),
+    ("vi", "scroll-up scroll-up scroll-up scroll-up scroll-up scroll-up scroll-up scroll-up scroll-up scroll-up", (1, 23, 10)),
+    ("vi", "scroll-up scroll-up scroll-down", (1, 19, 1)),
+    ("vi", "cursor-up cursor-up scroll-up scroll-down", (1, 16, 0)),
     ("vi", "begin-selection scroll-up scroll-up scroll-up", (1, 18, 3)),
     ("vi", "scroll-down", (1, 18, 0)),
     ("emacs", "scroll-up scroll-up scroll-up", (7, 18, 3)),

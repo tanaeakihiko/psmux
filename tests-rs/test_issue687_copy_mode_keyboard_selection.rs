@@ -183,6 +183,11 @@ fn visible_lines(app: &AppState, first: u16, last: u16) -> String {
     (first..=last).map(|r| format!("{}\n", visible_row(app, r))).collect()
 }
 
+// The tests below scroll the view with `scroll_copy_view`, the cursor kept on
+// its screen row: what they pin is the scroll offset a keyboard selection is
+// resolved against. Where `scroll-up` itself leaves the cursor (tmux keeps it
+// on its line with vi keys) is pinned in test_copy_mode_end_of_line.rs.
+
 fn yanked(app: &AppState) -> String {
     app.paste_top().unwrap_or_default().to_string()
 }
@@ -193,7 +198,7 @@ fn yanked(app: &AppState) -> String {
 fn a_line_selection_after_scrolling_yanks_the_lines_it_painted() {
     for scroll in [0usize, 1, 3, 7] {
         let mut app = copy_app();
-        scroll_copy_up(&mut app, scroll);
+        scroll_copy_view(&mut app, scroll, true);
         assert_eq!(app.copy_scroll_offset, scroll, "the view must actually move");
 
         let start = app.copy_pos.expect("a cursor").0;
@@ -217,7 +222,7 @@ fn the_selected_lines_are_the_ones_the_numbers_say() {
     // The same thing again, pinned to concrete content so the test cannot pass
     // by comparing two equally wrong readings of the screen.
     let mut app = copy_app();
-    scroll_copy_up(&mut app, 3);
+    scroll_copy_view(&mut app, 3, true);
     let (start, end) = (ROWS / 2, ROWS / 2 + 2);
     let first = visible_row(&app, start);
     assert!(first.starts_with("line-"),
@@ -233,7 +238,7 @@ fn the_selected_lines_are_the_ones_the_numbers_say() {
 #[test]
 fn a_character_selection_after_scrolling_yanks_what_it_painted() {
     let mut app = copy_app();
-    scroll_copy_up(&mut app, 4);
+    scroll_copy_view(&mut app, 4, true);
     let start = app.copy_pos.expect("a cursor").0;
     // Space is begin-selection in copy-mode-vi; v is rectangle-toggle (#694).
     crate::input::send_text_to_active(&mut app, " ").unwrap();
@@ -260,7 +265,7 @@ fn a_fresh_copy_mode_session_does_not_inherit_a_pinned_endpoint() {
     assert_eq!(app.copy_pos_scroll_offset, None,
         "entering copy mode must leave the endpoint in the current view");
     app.copy_pos = Some((ROWS / 2, 0));
-    scroll_copy_up(&mut app, 3);
+    scroll_copy_view(&mut app, 3, true);
     let start = app.copy_pos.expect("a cursor").0;
     crate::input::send_text_to_active(&mut app, "V").unwrap();
     crate::input::send_text_to_active(&mut app, "j").unwrap();
@@ -291,7 +296,7 @@ fn the_live_frame_and_the_yank_agree_on_a_keyboard_selection() {
     // it is the one the mouse tests read, which is how the two serialisers came
     // to disagree about the endpoint in the first place.
     let mut app = copy_app();
-    scroll_copy_up(&mut app, 3);
+    scroll_copy_view(&mut app, 3, true);
     let start = app.copy_pos.expect("a cursor").0;
     crate::input::send_text_to_active(&mut app, "V").unwrap();
     crate::input::send_text_to_active(&mut app, "j").unwrap();
@@ -316,7 +321,7 @@ fn a_pinned_endpoint_is_painted_where_the_yank_reads_it() {
     // the content line it was measured on, which is one row further down in the
     // view now on screen.
     let mut app = copy_app();
-    scroll_copy_up(&mut app, 3);
+    scroll_copy_view(&mut app, 3, true);
     let anchor_row = ROWS / 2;
     app.copy_anchor = Some((anchor_row, 0));
     app.copy_anchor_scroll_offset = app.copy_scroll_offset;
@@ -325,7 +330,7 @@ fn a_pinned_endpoint_is_painted_where_the_yank_reads_it() {
     app.copy_selection_mode = crate::types::SelectionMode::Line;
     let pinned_text = visible_lines(&app, anchor_row - 2, anchor_row);
 
-    scroll_copy_up(&mut app, 1);
+    scroll_copy_view(&mut app, 1, true);
     assert_eq!(app.copy_scroll_offset, 4, "the view moved under the pinned endpoint");
 
     let frame = crate::layout::dump_layout_json_fast(&mut app).expect("a frame");

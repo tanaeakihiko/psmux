@@ -68,7 +68,15 @@ function Start-Ns {
     # The vi keys and the copies below are vi's: emacs keys leave the end
     # cell of a selection out, as tmux does.
     & $PSMUX -L $NS set -g mode-keys vi 2>&1 | Out-Null
-    Start-Sleep -Milliseconds 2200
+    # Wait for the last line rather than a fixed time: Git Bash can take
+    # seconds to start, and copy mode entered while the lines still print
+    # selects whatever happened to be on screen.
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        Start-Sleep -Milliseconds 200
+        $shown = ((& $PSMUX -L $NS capture-pane -p -t s 2>&1) -join "`n") -match 'LINE200'
+    } until ($shown -or (Get-Date) -gt $deadline)
+    Start-Sleep -Milliseconds 300
     & $PSMUX -L $NS copy-mode -t s 2>&1 | Out-Null
     # Park the cursor on LINE196 (row 18 of 24), clear of both edges so no
     # motion below is clamped.
@@ -88,11 +96,14 @@ function Get-Buffer {
     ((& $PSMUX -L $NS show-buffer 2>&1 | Out-String).TrimEnd()) -replace "`r?`n", ","
 }
 
-# The cursor sits on LINE196 before any scrolling.  Scrolling the view up by N
-# leaves the cursor on the same screen row, which is now LINE(196-N), and the
-# two rows below it are the next two numbers.
+# The cursor sits on LINE196 before any scrolling, at the end of its text
+# (cursor-up from the empty last row goes to the end of each line, as tmux's
+# lastcx and lastsx have it). With vi keys scroll-up keeps the cursor on its
+# line as the view moves (tmux window_copy_cursor_up with scroll_only), until
+# it reaches the last row: three scrolls leave it on LINE196, ten take it to
+# LINE191 on the last row. These are the copies tmux 3.8 makes.
 function Expected($scroll) {
-    $first = 196 - $scroll
+    $first = @{ 0 = 196; 2 = 196; 3 = 196; 10 = 191 }[$scroll]
     (($first..($first + 2)) | ForEach-Object { "LINE{0:D3}" -f $_ }) -join ","
 }
 
@@ -132,9 +143,10 @@ Send-Key "Space"
 Send-Key "j"
 Send-Key "Enter"
 $got = Get-Buffer
-# From column 0 of LINE192 to column 0 of LINE193: the first line entire, then
-# one cell of the second.
-$want = "LINE192,L"
+# The cursor is on LINE196 at column 6, its last character, and vi keys keep
+# it on that line through the four scrolls; Space, j selects from there to
+# column 6 of LINE197, and tmux 3.8 copies "6", then LINE197.
+$want = "6,LINE197"
 if ($got -eq $want) { Write-Pass "Space, j, Enter copied [$got]" }
 else { Write-Fail "Space, j, Enter copied [$got], want [$want]" }
 Stop-Ns

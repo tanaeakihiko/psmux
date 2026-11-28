@@ -187,13 +187,17 @@ fn live_ctrl_n_moves_the_cursor_down_without_scrolling() {
 }
 
 #[test]
-fn live_ctrl_up_scrolls_one_line_and_leaves_the_cursor_alone() {
+fn live_ctrl_up_scrolls_one_line() {
     for mode in ["vi", "emacs"] {
         let mut app = copy_app(mode);
         let (r0, o0) = (row(&app), offset(&app));
         crate::input::send_key_to_active(&mut app, "C-Up").unwrap();
         assert_eq!(offset(&app), o0 + 1, "mode-keys={mode}: C-Up must scroll the viewport up exactly one line");
-        assert_eq!(row(&app), r0, "mode-keys={mode}: C-Up must not move the copy cursor");
+        // tmux's scroll-up is window_copy_cursor_up with scroll_only: vi keys
+        // keep the cursor on its line, so it moves down a row as the view
+        // moves up, and emacs keys keep it on its screen row.
+        let want = if mode == "vi" { r0 + 1 } else { r0 };
+        assert_eq!(row(&app), want, "mode-keys={mode}: C-Up keeps the cursor on its line (vi) or its row (emacs), as tmux 3.8 does");
     }
 }
 
@@ -207,7 +211,8 @@ fn live_ctrl_down_scrolls_one_line_back() {
         assert_eq!(o0, 2, "mode-keys={mode}: two C-Up presses must scroll two lines");
         crate::input::send_key_to_active(&mut app, "C-Down").unwrap();
         assert_eq!(offset(&app), o0 - 1, "mode-keys={mode}: C-Down must scroll back down exactly one line");
-        assert_eq!(row(&app), r0, "mode-keys={mode}: C-Down must not move the copy cursor");
+        let want = if mode == "vi" { r0 - 1 } else { r0 };
+        assert_eq!(row(&app), want, "mode-keys={mode}: C-Down keeps the cursor on its line (vi) or its row (emacs), as tmux 3.8 does");
     }
 }
 
@@ -259,10 +264,10 @@ fn handle_key_ctrl_arrows_scroll_one_line() {
     let r0 = row(&app);
     crate::input::handle_key(&mut app, ctrl(KeyCode::Up)).unwrap();
     assert_eq!(offset(&app), 1, "handle_key C-Up must scroll one line");
-    assert_eq!(row(&app), r0, "handle_key C-Up must not move the copy cursor");
+    assert_eq!(row(&app), r0 + 1, "handle_key vi C-Up keeps the cursor on its line, as tmux 3.8 does");
     crate::input::handle_key(&mut app, ctrl(KeyCode::Down)).unwrap();
     assert_eq!(offset(&app), 0, "handle_key C-Down must scroll back one line");
-    assert_eq!(row(&app), r0, "handle_key C-Down must not move the copy cursor");
+    assert_eq!(row(&app), r0, "handle_key vi C-Down brings it back with its line");
 }
 
 #[test]
@@ -294,7 +299,7 @@ fn live_ctrl_y_scrolls_up_and_ctrl_e_scrolls_back_down_in_vi_mode() {
     let (r0, c0) = (row(&app), col(&app));
     crate::input::send_key_to_active(&mut app, "C-y").unwrap();
     assert_eq!(offset(&app), 1, "vi C-y must scroll the viewport up one line");
-    assert_eq!(row(&app), r0, "vi C-y must not move the copy cursor");
+    assert_eq!(row(&app), r0 + 1, "vi C-y keeps the copy cursor on its line, as tmux 3.8 does");
     assert_eq!(col(&app), c0, "vi C-y must not move the copy cursor to the line end");
     crate::input::send_key_to_active(&mut app, "C-e").unwrap();
     assert_eq!(offset(&app), 0, "vi C-e must scroll the viewport back down one line");
@@ -328,10 +333,10 @@ fn live_shift_k_scrolls_up_and_shift_j_scrolls_back_down_in_vi_mode() {
     let (r0, c0) = (row(&app), col(&app));
     crate::input::send_text_to_active(&mut app, "K").unwrap();
     assert_eq!(offset(&app), 1, "vi K must scroll the viewport up one line");
-    assert_eq!((row(&app), col(&app)), (r0, c0), "vi K must not move the copy cursor");
+    assert_eq!((row(&app), col(&app)), (r0 + 1, c0), "vi K keeps the copy cursor on its line, as tmux 3.8 does");
     crate::input::send_text_to_active(&mut app, "J").unwrap();
     assert_eq!(offset(&app), 0, "vi J must scroll the viewport back down one line");
-    assert_eq!((row(&app), col(&app)), (r0, c0), "vi J must not move the copy cursor");
+    assert_eq!((row(&app), col(&app)), (r0, c0), "vi J brings the copy cursor back with its line");
 }
 
 #[test]
@@ -358,7 +363,7 @@ fn handle_key_ctrl_e_and_ctrl_y_match_the_live_path() {
     let (r0, c0) = (row(&app), col(&app));
     crate::input::handle_key(&mut app, ctrl(KeyCode::Char('y'))).unwrap();
     assert_eq!(offset(&app), 1, "handle_key vi C-y must scroll up one line");
-    assert_eq!((row(&app), col(&app)), (r0, c0), "handle_key vi C-y must not move the cursor");
+    assert_eq!((row(&app), col(&app)), (r0 + 1, c0), "handle_key vi C-y keeps the cursor on its line");
     crate::input::handle_key(&mut app, ctrl(KeyCode::Char('e'))).unwrap();
     assert_eq!(offset(&app), 0, "handle_key vi C-e must scroll back down one line");
     assert_eq!(col(&app), c0, "handle_key vi C-e must not jump to the end of the line");
@@ -375,7 +380,7 @@ fn handle_key_shift_j_and_k_scroll_in_vi_mode_only() {
     let r0 = row(&app);
     crate::input::handle_key(&mut app, KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT)).unwrap();
     assert_eq!(offset(&app), 1, "handle_key vi K must scroll up one line");
-    assert_eq!(row(&app), r0, "handle_key vi K must not move the cursor");
+    assert_eq!(row(&app), r0 + 1, "handle_key vi K keeps the cursor on its line");
     crate::input::handle_key(&mut app, KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT)).unwrap();
     assert_eq!(offset(&app), 0, "handle_key vi J must scroll back down one line");
 
