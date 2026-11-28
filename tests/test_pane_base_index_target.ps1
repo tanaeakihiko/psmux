@@ -123,12 +123,15 @@ function Reset-Focus {
     Expect-Step @("select-pane", "-t", $script:W0First.Id) | Out-Null
 }
 
-# Which panes show the marker text, by "<window id>.<pane index>".
+# Which panes show the marker text, by "<window id>.<pane index>". The rows
+# are joined before the search: markers sent to one pane pile up on its
+# prompt line, and the Windows 10 inbox console host ends a full row with
+# CR LF instead of wrapping it, so -J cannot join a marker it split.
 function Get-MarkerPanes([string]$Marker) {
     $Found = @()
     foreach ($Pane in $script:Panes) {
         $Capture = Expect-Step @("capture-pane", "-t", $Pane.Id, "-p", "-J")
-        if ($Capture.Out -match [regex]::Escape($Marker)) { $Found += "$($Pane.WinId).$($Pane.Index)" }
+        if (($Capture.Out -replace "\r?\n", "") -match [regex]::Escape($Marker)) { $Found += "$($Pane.WinId).$($Pane.Index)" }
     }
     return ($Found -join ",")
 }

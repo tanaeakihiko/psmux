@@ -105,6 +105,18 @@ while ($true) {
     Start-Sleep -Milliseconds 10
 }
 '@ | Set-Content -LiteralPath $worker -Encoding utf8
+    # The Windows 10 inbox console host holds an OSC that ends a write until the
+    # program writes something more (19045: an OSC 133 report alone reached
+    # psmux only with the next output, 3 s later, and at once when text
+    # followed it in the same write), so a report would wait for the next one.
+    # There the worker writes a space after each report, as a program writes
+    # its own output after it. OpenConsole and the console host of Windows 11
+    # pass the report at once.
+    if ([Environment]::OSVersion.Version.Build -lt 22000 -and -not $env:PSMUX_CONPTY_DIR) {
+        $w = [IO.File]::ReadAllText($worker)
+        $w = $w.Replace('[Console]::Write("$([char]27)]7501;$body$([char]7)")', '[Console]::Write("$([char]27)]7501;$body$([char]7) ")')
+        [IO.File]::WriteAllText($worker, $w, [Text.UTF8Encoding]::new($false))
+    }
     $control = Join-Path $work 'report.txt'
     Set-Control $control 'state=working:app=test'
     $command = 'pwsh -NoLogo -NoProfile -NonInteractive -File "' + $worker + '" -Control "' + $control + '"'

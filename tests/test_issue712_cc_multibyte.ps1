@@ -65,6 +65,18 @@ function Stop-CC($cc) {
 }
 function Send-CC($cc, [string]$cmd) { $cc.P.StandardInput.Write("$cmd`n"); $cc.P.StandardInput.Flush() }
 
+$inboxConhost = [Environment]::OSVersion.Version.Build -lt 22000 -and -not $env:PSMUX_CONPTY_DIR
+
+# The pane's long row that starts with $prefix (the printed line; the prompt
+# starts with PS), as `capture-pane -p` prints it, read as UTF-8.
+function Get-PaneRow([string]$ns, [string]$paneId, [string]$prefix) {
+    $psi = [System.Diagnostics.ProcessStartInfo]::new($PSMUX, "-L $ns capture-pane -p -t $paneId -S -")
+    $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.StandardOutputEncoding = $utf8
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $text = $p.StandardOutput.ReadToEnd(); $p.WaitForExit()
+    return @($text -split "`r?`n" | Where-Object { $_.StartsWith($prefix) -and $_.Length -gt 20 } | Select-Object -First 1)[0]
+}
+
 function New-TestSession([string]$ns, [string]$text) {
     $fix = Join-Path $work "$ns.txt"
     [System.IO.File]::WriteAllText($fix, $text + "`n", $utf8)
@@ -104,7 +116,16 @@ foreach ($case in $cases) {
         if ($gotEnd) { Write-Pass "%end arrived for capture-pane" } else { Write-Fail "%end never arrived for capture-pane" }
         # Byte exact: the raw UTF-8 bytes of the line must appear on stdout as a whole line.
         $raw = Read-Shared $cc.Out
-        $needle = $utf8.GetBytes($line + "`n")
+        $want = $line
+        if ($inboxConhost -and $case.Cp -gt 0xFFFF) {
+            # The Windows 10 inbox console host hands psmux some of these 60
+            # characters as U+FFFD (19045: two of them, its raw stream says),
+            # so the pane does not hold the line that was printed. There the
+            # relay is held to the row the server has, as its CLI prints it.
+            $row = Get-PaneRow $ns $paneId ('a' * $case.P)
+            if ($row) { $want = $row }
+        }
+        $needle = $utf8.GetBytes($want + "`n")
         $hay = [System.BitConverter]::ToString($raw); $pin = [System.BitConverter]::ToString($needle)
         if ($hay.Contains($pin)) { Write-Pass "long line arrived byte for byte as raw UTF-8" } else { Write-Fail "long line missing or altered on stdout" }
         Send-CC $cc "display-message -p ANSWER_712"

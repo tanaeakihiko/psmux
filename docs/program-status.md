@@ -73,6 +73,8 @@ printf '\033]7501;state=clear\033\\'
 
 BEL is also accepted as a terminator. With `program-status` on, psmux replies to `OSC 7501 ; ? ST` through the pane input pipe before a following primary-device-attributes reply. Reports are consumed locally, not forwarded to the outer terminal.
 
+On Windows 10 (build 19045) the inbox console host holds a sequence that ends a program's write until the program writes something more, so a report printed on its own takes effect with the program's next output, not at once. A report followed by more output in the same write takes effect at once. Through OpenConsole (`PSMUX_CONPTY_DIR`), and on Windows 11, a report takes effect at once.
+
 The root record has no id. Children use slash-separated ids, replace their own record completely, and inherit app from their nearest ancestor with an explicit app. A hierarchical clear removes the addressed record and its descendants. Each pane holds at most 64 records, evicting the least recently updated record when full.
 
 Primary/alternate screen switches and soft resets preserve records. Full reset (RIS) clears them. A new shell prompt (`OSC 133 A`) or attached-process exit removes idle, working, and blocked records; done/error survive. Respawning the pane clears records and acknowledgement. Records are not persisted across server restarts.

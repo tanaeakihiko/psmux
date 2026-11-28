@@ -97,10 +97,15 @@ try {
         @{ n = '-r keeps LF';                                     bp = 'on';  buf = "a`nb`nc";     a = @('-r');           want = 'a<LF>b<LF>c' },
         @{ n = '-s X replaces LF with X';                         bp = 'on';  buf = "a`nb`nc";     a = @('-s', 'X');      want = 'aXbXc' },
         @{ n = '-p keeps the CR separator inside the brackets';   bp = 'on';  buf = "a`nb`nc";     a = @('-p');           want = '<ESC>[200~a<CR>b<CR>c<ESC>[201~' },
-        @{ n = '-p -r keeps LF inside the brackets';              bp = 'on';  buf = "a`nb`nc";     a = @('-p', '-r');     want = '<ESC>[200~a<LF>b<LF>c<ESC>[201~' },
+        @{ n = '-p -r keeps LF inside the brackets';              bp = 'on';  buf = "a`nb`nc";     a = @('-p', '-r');     want = '<ESC>[200~a<LF>b<LF>c<ESC>[201~'; inbox = '<ESC>[200~a<CR>b<CR>c<ESC>[201~' },
         @{ n = 'a CRLF is one line break, not two';               bp = 'on';  buf = "a`r`nb";      a = @();               want = 'a<CR>b' },
-        @{ n = '-p -r turns CRLF into one LF';                    bp = 'on';  buf = "a`r`nb";      a = @('-p', '-r');     want = '<ESC>[200~a<LF>b<ESC>[201~' }
+        @{ n = '-p -r turns CRLF into one LF';                    bp = 'on';  buf = "a`r`nb";      a = @('-p', '-r');     want = '<ESC>[200~a<LF>b<ESC>[201~'; inbox = '<ESC>[200~a<CR>b<ESC>[201~' }
     )
+    # The Windows 10 inbox console host turns an LF inside a bracketed paste
+    # into CR before the program reads it (19045: both -p -r cases arrive with
+    # CR, while -r without brackets keeps its LF). OpenConsole and the console
+    # host of Windows 11 keep the LF, so there the tmux bytes are wanted.
+    $inboxConhost = [Environment]::OSVersion.Version.Build -lt 22000 -and -not $env:PSMUX_CONPTY_DIR
     $k = 0
     foreach ($c in $cases) {
         $k++
@@ -110,8 +115,9 @@ try {
         & $PSMUX @pa 2>&1 | Out-Null
         Start-Sleep -Milliseconds 1000
         $got = Stop-Probe $p
-        if ($got -eq $c.want) { Write-Pass "$($c.n): $got" }
-        else { Write-Fail "$($c.n): want '$($c.want)' got '$got'" }
+        $want = if ($inboxConhost -and $c.inbox) { $c.inbox } else { $c.want }
+        if ($got -eq $want) { Write-Pass "$($c.n): $got" }
+        else { Write-Fail "$($c.n): want '$want' got '$got'" }
     }
 
     Write-Host "`n=== Part 2: a real Windows Terminal Ctrl+V into a 2004 pane ===" -ForegroundColor Yellow

@@ -248,9 +248,13 @@ A command with no `-t` reaches the session with the most recent activity, the sa
 
 `send-keys -H 68 69` writes single bytes to the pane, byte exact. `send-paste` takes a base64 payload at the CLI, so multi line text with quotes and semicolons is delivered as one bracketed paste and can never be misread as a second command.
 
+On Windows 10 (build 19045) the inbox console host turns an LF inside a bracketed paste into CR before the program reads it, so `paste-buffer -p -r` hands the program CR there, where tmux keeps the LF. Without the brackets, `paste-buffer -r` keeps the LF. Through OpenConsole (`PSMUX_CONPTY_DIR`) the LF arrives inside the brackets too.
+
 ### UTF-8 and CJK Support
 
 Multi-byte UTF-8 characters (box-drawing, emoji, CJK text) render correctly in panes. Pasting CJK text no longer crashes the session. Japanese and Korean IME input is handled with minimal latency (the paste-detection heuristic was tuned to avoid misidentifying rapid IME bursts).
+
+On Windows 10 (build 19045) the inbox console host hands psmux some characters outside the Basic Multilingual Plane as U+FFFD when a program prints them in a long line (two of a line of 60 U+1F600, for instance), so the pane shows the replacement character for those. Through OpenConsole (`PSMUX_CONPTY_DIR`) every character arrives.
 
 Emoji clusters take the columns tmux gives them (#749). A ZWJ sequence such as a family, an emoji with a skin tone modifier, a flag spelled with two regional indicators, and a character followed by the variation selector U+FE0F each occupy one cell two columns wide, so `U+1F468 ZWJ U+1F469 ZWJ U+1F467 ZWJ U+1F466` moves the cursor two columns, not eight. The rules are tmux's `utf8_should_combine` (utf8-combined.c) and `screen_write_combine` (screen-write.c), including tmux's 32 byte limit on one cell, and command prompts count columns with the same rule. Windows Terminal, VS Code, JetBrains, WezTerm, Alacritty, ConEmu and conhost draw these sequences as one glyph too; mintty is the known outlier and draws the parts separately.
 

@@ -83,6 +83,20 @@ Start-Sleep -Seconds 3
 Start-Sleep -Seconds 8
 '@ | Set-Content -Path "$emitDir\emit_set_then_clear.ps1" -Encoding ASCII
 
+# The Windows 10 inbox console host holds an OSC that ends a write until the
+# program writes something more: on 19045 each of these sequences reached
+# psmux only with the next output, 3 s later, and at once when text followed
+# it in the same write. So there each emitter writes a space after the
+# sequence, as a shell writes its prompt or the command's output after it.
+# OpenConsole and the console host of Windows 11 pass it at once.
+$InboxConhost = [Environment]::OSVersion.Version.Build -lt 22000 -and -not $env:PSMUX_CONPTY_DIR
+if ($InboxConhost) {
+    foreach ($f in Get-ChildItem "$emitDir\emit_*.ps1") {
+        $t = [IO.File]::ReadAllText($f.FullName).Replace('$e\")', '$e\ ")')
+        [IO.File]::WriteAllText($f.FullName, $t)
+    }
+}
+
 # === SETUP ===
 Cleanup
 & $PSMUX new-session -d -s $SESSION

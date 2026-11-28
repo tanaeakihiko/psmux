@@ -152,6 +152,10 @@ try {
     $stream = $c.StandardOutput.BaseStream
     $pending = $stream.ReadAsync($buf, 0, $buf.Length)
     $lat = @()
+    # The Windows 10 inbox console host ends a full row with CR LF instead of
+    # letting it wrap, so the token typed across column 80 comes as
+    # `QQ\015\012014Q` (measured on 19045). There the check joins that break.
+    $inboxConhost = [Environment]::OSVersion.Version.Build -lt 22000 -and -not $env:PSMUX_CONPTY_DIR
     Start-Sleep -Milliseconds 1500
     for ($i = 0; $i -lt 25; $i++) {
         $tok = 'Q{0:d3}Q' -f $i
@@ -164,7 +168,9 @@ try {
                 if ($n -le 0) { break }
                 [void]$acc.Append([Text.Encoding]::ASCII.GetString($buf, 0, $n))
                 $pending = $stream.ReadAsync($buf, 0, $buf.Length)
-                if ($acc.ToString() -match "(?m)^%output %\d+ [^\r\n]*$tok") { $got = $true; break }
+                $seen = $acc.ToString()
+                if ($inboxConhost) { $seen = $seen.Replace('\015\012', '') }
+                if ($seen -match "(?m)^%output %\d+ [^\r\n]*$tok") { $got = $true; break }
             }
         }
         if ($got) { $lat += $sw.Elapsed.TotalMilliseconds }
