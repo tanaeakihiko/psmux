@@ -19,6 +19,17 @@ function Add-MachinePath([string]$dir) {
         [Environment]::SetEnvironmentVariable('Path', ($dir + ';' + $p), 'Machine')
     }
 }
+# The App Installer's python.exe / python3.exe execution aliases open the
+# Store instead of running Python; removing the alias files is what turning
+# the aliases off in Settings does.
+function Remove-PythonStoreAliases {
+    foreach ($d in Get-ChildItem 'C:\Users\*\AppData\Local\Microsoft\WindowsApps' -Directory -Force -EA SilentlyContinue) {
+        foreach ($n in 'python.exe', 'python3.exe') {
+            $a = Join-Path $d.FullName $n
+            if (Test-Path -LiteralPath $a) { Remove-Item -LiteralPath $a -Force; Note "removed Store alias $a" }
+        }
+    }
+}
 function Run([string]$exe, [string[]]$argv) {
     $p = Start-Process -FilePath $exe -ArgumentList $argv -Wait -PassThru -NoNewWindow
     if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "$exe $($argv -join ' ') exited $($p.ExitCode)" }
@@ -47,9 +58,27 @@ if ($f = Find 'python-*-amd64.exe') {
     $ver = ($f.BaseName -replace '^python-', '' -replace '-amd64$', '').Split('.')
     $target = "C:\Python$($ver[0])$($ver[1])"
     # Re-running the bundle over an existing install fails (1601) under SYSTEM.
-    if (Test-Path "$target\python.exe") { Note "python already in $target" } else {
-    Run $f.FullName @('/quiet', 'InstallAllUsers=1', 'PrependPath=1', 'Include_test=0', "TargetDir=$target")
-    Note "python in $target" }
+    # The Windows 11 image ended up with python.exe but no standard library
+    # (Lib held only site-packages, "No module named 'encodings'"), so judge
+    # the install by the stdlib and repair a partial one.
+    if (Test-Path "$target\Lib\encodings\__init__.py") { Note "python already in $target" }
+    elseif (Test-Path "$target\python.exe") {
+        Run $f.FullName @('/quiet', '/repair', 'InstallAllUsers=1', 'Include_test=0', "TargetDir=$target")
+        Note "python repaired in $target"
+    } else {
+        Run $f.FullName @('/quiet', 'InstallAllUsers=1', 'PrependPath=1', 'Include_test=0', "TargetDir=$target")
+        Note "python in $target"
+    }
+    if (-not (Test-Path "$target\Lib\encodings\__init__.py")) { throw "python in $target has no standard library" }
+    # PrependPath does not reach the machine PATH when the bundle runs as
+    # SYSTEM on the Windows 11 image, and the user PATH has WindowsApps, whose
+    # python.exe and python3.exe are the Store aliases: a suite that runs
+    # `python` then gets the Store stub (test_issue263_python_raw). Put the
+    # install on the machine PATH, which comes first, and drop the aliases
+    # from every profile that has them.
+    Add-MachinePath "$target\Scripts"
+    Add-MachinePath $target
+    Remove-PythonStoreAliases
 }
 # Visual C++ 2015 to 2022 runtime: nvim and other tools die with
 # STATUS_DLL_NOT_FOUND (0xC0000135) without vcruntime140_1.dll, and a fresh
