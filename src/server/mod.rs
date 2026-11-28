@@ -430,10 +430,11 @@ fn spawn_plugin_scripts(app: &mut AppState) -> Vec<std::process::Child> {
 /// What a spare shell in the pool was spawned with, of the options a config
 /// file can change: warm_pane_sync::for_option_change respawns the pool for
 /// each of them.
-fn pool_spawn_inputs(app: &AppState) -> (String, bool, bool, bool) {
+fn pool_spawn_inputs(app: &AppState) -> (String, bool, bool, bool, bool) {
     (
         app.default_shell.clone(),
         app.allow_predictions,
+        app.env_shim,
         app.claude_code_fix_tty,
         app.claude_code_force_interactive,
     )
@@ -447,7 +448,7 @@ fn pool_spawn_inputs(app: &AppState) -> (String, bool, bool, bool) {
 fn reconcile_pool_after_source(
     app: &mut AppState,
     pty_system: &dyn portable_pty::PtySystem,
-    before: &(String, bool, bool, bool),
+    before: &(String, bool, bool, bool, bool),
 ) {
     if pool_spawn_inputs(app) != *before {
         crate::warm_pane_sync::apply(
@@ -6008,9 +6009,11 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     app.hooks.clear();
                     app.defaults_suppressed = false;
                     crate::config::populate_default_bindings(&mut app);
-                    // The shell this standby booted with. Its window 0 pane
-                    // and every spare in its pool are already running it.
-                    let shell_at_boot = app.default_shell.clone();
+                    // What this standby booted with: the shell, and the
+                    // options its init script and environment were made from.
+                    // Its window 0 pane and every spare in its pool are already
+                    // running with them.
+                    let spawn_at_boot = pool_spawn_inputs(&app);
                     load_config(&mut app);
                     // Re-seed update-environment from the adopted (claiming
                     // client's) environment, replacing the standby's seed (#775).
@@ -6034,13 +6037,15 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     // warm_pane_sync::for_post_config does for a cold server;
                     // the window 0 pane is the one thing that module never
                     // touches, hence respawn_active_pane here, with -k, which
-                    // on a standby is a pane nobody has typed into.
-                    let shell_now = app.default_shell.clone();
-                    let shell_changed = shell_now != shell_at_boot;
-                    if shell_changed {
+                    // on a standby is a pane nobody has typed into. The same
+                    // holds for env-shim, allow-predictions and the Claude Code
+                    // options, which the pane also took at its spawn.
+                    let spawn_now = pool_spawn_inputs(&app);
+                    let spawn_changed = spawn_now != spawn_at_boot;
+                    if spawn_changed {
                         warm_debug(&format!(
-                            "CLAIM: shell changed since standby boot ({:?} -> {:?}); respawning window 0 and the pool",
-                            shell_at_boot, shell_now
+                            "CLAIM: spawn options changed since standby boot ({:?} -> {:?}); respawning window 0 and the pool",
+                            spawn_at_boot, spawn_now
                         ));
                         if let Err(e) = respawn_active_pane(&mut app, Some(&*pty_system), None, true, None, false, &[]) {
                             warm_debug(&format!("CLAIM: window 0 respawn failed: {}", e));
@@ -6098,7 +6103,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     // CreateProcessW contends with the replacement standby and
                     // the pool refill. Placed after the reply with the pool
                     // refill; no other request runs in between.
-                    if path_changed && !shell_changed {
+                    if path_changed && !spawn_changed {
                         warm_debug("CLAIM: PATH changed by the claim; respawning window 0");
                         let respawn_dir = client_cwd
                             .as_deref()
@@ -6117,12 +6122,12 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                     // triggers in warm_pane_sync.  This is AFTER the claim
                     // response on purpose: the client is already unblocked, so
                     // the refill costs the user nothing.
-                    if env_adopted || shell_changed {
+                    if env_adopted || spawn_changed {
                         crate::warm_pane_sync::apply(
                             &mut app,
                             &*pty_system,
-                            crate::warm_pane_sync::WarmPaneSync::Respawn(if shell_changed {
-                                "claim: default-shell changed since the standby booted"
+                            crate::warm_pane_sync::WarmPaneSync::Respawn(if spawn_changed {
+                                "claim: spawn options changed since the standby booted"
                             } else {
                                 "claim: client environment adopted"
                             }),

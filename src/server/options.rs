@@ -1188,6 +1188,7 @@ pub(crate) fn get_option_value(app: &AppState, name: &str) -> String {
         "priority" => app.priority.clone(),
         "prediction-dimming" => if app.prediction_dimming { "on".into() } else { "off".into() },
         "allow-predictions" => if app.allow_predictions { "on".into() } else { "off".into() },
+        "env-shim" => if app.env_shim { "on".into() } else { "off".into() },
         "cursor-style" => std::env::var("PSMUX_CURSOR_STYLE").unwrap_or_else(|_| "default".to_string()),
         "cursor-blink" => if crate::rendering::cursor_blink_option()
             .unwrap_or(crate::rendering::CURSOR_BLINK_DEFAULT_BLINKS) { "on".into() } else { "off".into() },
@@ -1483,6 +1484,7 @@ pub(crate) fn is_boolean_option(name: &str) -> bool {
             | "visual-bell"
             | "prediction-dimming"
             | "allow-predictions"
+            | "env-shim"
             | "cursor-blink"
             | "warm"
             | "alternate-screen"
@@ -1880,6 +1882,11 @@ pub(crate) fn apply_set_option(
         }
         "allow-predictions" => {
             app.allow_predictions = matches!(value, "on" | "true" | "1" | "yes");
+        }
+        // The config parser's arm, for a set at run time: without it the name
+        // was kept as text and the next pane still got the `env` function.
+        "env-shim" => {
+            app.env_shim = matches!(value, "on" | "true" | "1" | "yes");
         }
         "cursor-style" => { std::env::set_var("PSMUX_CURSOR_STYLE", value); }
         "cursor-blink" => {

@@ -103,6 +103,10 @@ pub fn for_option_change(name: &str, app: &AppState) -> WarmPaneSync {
         // it got — only a fresh spawn picks up the new value (#165).
         "allow-predictions" => WarmPaneSync::Respawn("allow-predictions changed"),
 
+        // The `env` function is defined by the same init script, so a spare
+        // keeps the value it was spawned with.
+        "env-shim" => WarmPaneSync::Respawn("env-shim changed"),
+
         // default-terminal feeds `TERM` into the child env at spawn
         // time.  An already-running child has the old TERM baked in.
         "default-terminal" => WarmPaneSync::Respawn("default-terminal changed"),
@@ -219,6 +223,12 @@ pub fn for_post_config(app: &AppState) -> WarmPaneSync {
     // wrong PSReadLine init.
     if app.allow_predictions {
         return WarmPaneSync::Respawn("post-config: predictions enabled");
+    }
+
+    // Config turned env-shim off: the early pwsh defined the `env` function,
+    // and the first window would get it from this pane.
+    if !app.env_shim {
+        return WarmPaneSync::Respawn("post-config: env-shim off");
     }
 
     // history-limit only differs in the parser cap, no respawn.

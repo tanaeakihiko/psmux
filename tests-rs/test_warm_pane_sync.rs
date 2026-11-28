@@ -52,6 +52,15 @@ fn option_allow_predictions_requires_respawn() {
 }
 
 #[test]
+fn option_env_shim_requires_respawn() {
+    let app = fresh_app();
+    assert!(matches!(
+        for_option_change("env-shim", &app),
+        WarmPaneSync::Respawn(_)
+    ));
+}
+
+#[test]
 fn option_default_terminal_requires_respawn() {
     let app = fresh_app();
     assert!(matches!(
@@ -281,6 +290,15 @@ fn post_config_global_env_set_respawns() {
 fn post_config_predictions_respawn() {
     let mut app = fresh_app();
     app.allow_predictions = true;
+    assert!(matches!(for_post_config(&app), WarmPaneSync::Respawn(_)));
+}
+
+#[test]
+fn post_config_env_shim_off_respawns() {
+    // The early pane ran the init script with the default env-shim on, so it
+    // defined the `env` function; the first window must not get that pane.
+    let mut app = fresh_app();
+    app.env_shim = false;
     assert!(matches!(for_post_config(&app), WarmPaneSync::Respawn(_)));
 }
 

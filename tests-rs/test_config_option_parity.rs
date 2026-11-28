@@ -218,6 +218,24 @@ fn config_file_validation_only_options_do_not_warn() {
 }
 
 #[test]
+fn env_shim_set_at_runtime_lands_where_the_config_puts_it() {
+    // env-shim is not in the catalog, so the sweep below does not reach it.
+    // The runtime set had no arm and kept the value as text, so `show` said
+    // off while the next pane still got the `env` function.
+    let cfg = config_set("env-shim", "off");
+    let mut rt = runtime_set("env-shim", "off");
+    assert!(!cfg.env_shim);
+    assert!(!rt.env_shim, "runtime set -g env-shim off left the shim on");
+    assert!(!rt.user_options.contains_key("env-shim"));
+    assert_eq!(crate::server::options::get_option_value(&rt, "env-shim"), "off");
+    assert_eq!(crate::server::options::get_option_value(&app(), "env-shim"), "on");
+    crate::server::options::apply_set_option(&mut rt, "env-shim", "on", false).unwrap();
+    assert!(rt.env_shim);
+    // `set -g env-shim` with no value toggles, as for the other switches.
+    assert!(crate::server::options::is_boolean_option("env-shim"));
+}
+
+#[test]
 fn config_file_invalid_alternate_screen_value_still_warns() {
     let a = config_set("alternate-screen", "sideways");
     assert!(

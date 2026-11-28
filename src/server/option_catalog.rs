@@ -576,7 +576,7 @@ pub static TMUX_OPTION_NAMES: &[&str] = &[
 
 /// psmux names that are neither in the catalog nor in tmux's table but that a
 /// setter or the config parser handles: `dim-predictions` (an alias of
-/// `prediction-dimming`), `env-shim` (config file) and `session-group`.
+/// `prediction-dimming`), `env-shim` and `session-group`.
 pub static PSMUX_EXTRA_OPTION_NAMES: &[&str] = &["dim-predictions", "env-shim", "session-group"];
 
 /// True for a name `set-option` and `show-options` accept: a `@user` option,
