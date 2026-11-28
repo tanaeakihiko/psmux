@@ -408,9 +408,15 @@ set -g env-shim off
     $proc = Start-TestSession -ConfigContent $config
     Start-Sleep -Milliseconds 1000
     $marker = "SHIMOFF_$(Get-Random)"
-    & $PSMUX send-keys -t $SESSION "if(Get-Command env -EA 0 -Type Function){Write-Host '${marker}:func_exists'}else{Write-Host '${marker}:no_func'}" Enter 2>&1 | Out-Null
-    Start-Sleep -Milliseconds 1000
-    $captured = & $PSMUX capture-pane -t $SESSION -p 2>&1 | Out-String
+    # The marker and the answer are joined by the shell, so the echo of the
+    # typed line (which holds both answers) cannot match either.
+    & $PSMUX send-keys -t $SESSION "if(Get-Command env -EA 0 -Type Function){Write-Host ('${marker}' + ':func_exists')}else{Write-Host ('${marker}' + ':no_func')}" Enter 2>&1 | Out-Null
+    # Read until the answer is on the screen; the shell may still be starting.
+    for ($i = 0; $i -lt 60; $i++) {
+        $captured = & $PSMUX capture-pane -t $SESSION -p 2>&1 | Out-String
+        if ($captured -match "${marker}:(no_func|func_exists)") { break }
+        Start-Sleep -Milliseconds 250
+    }
     if ($captured -match "${marker}:no_func") {
         Write-Pass "env-shim off: no env function defined"
     } elseif ($captured -match "${marker}:func_exists") {
