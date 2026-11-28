@@ -562,14 +562,39 @@ const FRAME_READER_NO_TTL: std::time::Duration = std::time::Duration::from_milli
 /// Set only by `leaf_record_reader`, so only below `CONPTY_MOUSE_MIN_BUILD`
 /// with the mouse on; on every other host the server loop reads one false
 /// atomic per iteration and nothing else.
+#[cfg(not(test))]
 static READER_RECHECK_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(not(test))]
 static READER_RECHECK_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
+// In the unit tests the recheck is per thread. It is process wide in psmux
+// (the layout can be built off the server loop's thread), but the tests run
+// in parallel in one process: a test that serializes a layout while another
+// holds PSMUX_FAKE_WIN_BUILD=19045 (an env var every thread sees) scheduled a
+// recheck that the other's `take_reader_recheck_due` then took as its own.
+// Each test calls both functions on its own thread, so per thread state
+// keeps what it checks and nothing else.
+#[cfg(test)]
+thread_local! {
+    static READER_RECHECK_PENDING: std::sync::atomic::AtomicBool = const { std::sync::atomic::AtomicBool::new(false) };
+    static READER_RECHECK_AT: Mutex<Option<std::time::Instant>> = const { Mutex::new(None) };
+}
+
+/// Runs `f` on the recheck state: the statics, or this thread's copy in tests.
+fn with_reader_recheck<R>(f: impl FnOnce(&std::sync::atomic::AtomicBool, &Mutex<Option<std::time::Instant>>) -> R) -> R {
+    #[cfg(not(test))]
+    { f(&READER_RECHECK_PENDING, &READER_RECHECK_AT) }
+    #[cfg(test)]
+    { READER_RECHECK_PENDING.with(|pending| READER_RECHECK_AT.with(|at| f(pending, at))) }
+}
+
 fn schedule_reader_recheck(at: std::time::Instant) {
-    if let Ok(mut slot) = READER_RECHECK_AT.lock() {
-        *slot = Some(slot.map_or(at, |old| old.min(at)));
-        READER_RECHECK_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
+    with_reader_recheck(|pending, slot| {
+        if let Ok(mut slot) = slot.lock() {
+            *slot = Some(slot.map_or(at, |old| old.min(at)));
+            pending.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    })
 }
 
 /// Does a frame that used a cached "no" for the active pane's record reader
@@ -578,22 +603,24 @@ fn schedule_reader_recheck(at: std::time::Instant) {
 /// again (see `leaf_record_reader`).  True once per scheduled recheck.
 pub(crate) fn take_reader_recheck_due() -> bool {
     use std::sync::atomic::Ordering;
-    if !READER_RECHECK_PENDING.load(Ordering::Relaxed) {
-        return false;
-    }
-    let Ok(mut slot) = READER_RECHECK_AT.lock() else { return false };
-    match *slot {
-        Some(at) if std::time::Instant::now() >= at => {
-            *slot = None;
-            READER_RECHECK_PENDING.store(false, Ordering::Relaxed);
-            true
+    with_reader_recheck(|pending, slot| {
+        if !pending.load(Ordering::Relaxed) {
+            return false;
         }
-        Some(_) => false,
-        None => {
-            READER_RECHECK_PENDING.store(false, Ordering::Relaxed);
-            false
+        let Ok(mut slot) = slot.lock() else { return false };
+        match *slot {
+            Some(at) if std::time::Instant::now() >= at => {
+                *slot = None;
+                pending.store(false, Ordering::Relaxed);
+                true
+            }
+            Some(_) => false,
+            None => {
+                pending.store(false, Ordering::Relaxed);
+                false
+            }
         }
-    }
+    })
 }
 
 /// The leaf half of `frame_marks_record_readers`.  Only the active pane asks
