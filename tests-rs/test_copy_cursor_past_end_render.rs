@@ -97,3 +97,19 @@ fn with_line_numbers_a_cursor_past_the_content_draws_a_dollar() {
     let (row, _) = render(&leaf((3, W - gw - 1)), true);
     assert!(row.ends_with('a'), "the last content column draws no $, row 3 is [{row}]");
 }
+
+/// Row 3 is 18 'a' and a wide character in the last two columns. tmux writes
+/// the `$` over the wide character's second cell, which clears the character
+/// (screen_write_overwrite), so the row reads 18 'a', a blank and the `$`.
+#[test]
+fn a_dollar_over_a_last_wide_character_replaces_it() {
+    let mut l = leaf((3, W));
+    if let LayoutJson::Leaf { content, .. } = &mut l {
+        for c in 18..W as usize { content[3][c] = cell(' '); }
+        content[3][18].text = "\u{4e16}".to_string();
+        content[3][19].text = String::new();
+    }
+    let (row, cursor) = render(&l, false);
+    assert_eq!(row, format!("{} $", "a".repeat(18)));
+    assert_eq!(cursor, (W - 1, 3));
+}

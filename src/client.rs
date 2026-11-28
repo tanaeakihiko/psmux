@@ -2987,6 +2987,17 @@ pub fn render_layout_json(
                         let at = ratatui::layout::Position { x: inner.x + inner.width - 1, y: cy };
                         let buf = f.buffer_mut();
                         if buf.area.contains(at) {
+                            // A wide character in the two cells before covers
+                            // this one, and the frame diff skips a covered
+                            // cell, so the `$` would never be drawn. tmux's
+                            // write over the second cell clears the character
+                            // (screen_write_overwrite): blank it too.
+                            if at.x > inner.x {
+                                let before = ratatui::layout::Position { x: at.x - 1, y: cy };
+                                if vt100::str_width(buf[before].symbol()) >= 2 {
+                                    buf[before].set_symbol(" ");
+                                }
+                            }
                             let cell = &mut buf[at];
                             cell.reset();
                             cell.set_symbol("$");
