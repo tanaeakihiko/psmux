@@ -51,6 +51,34 @@ Bare names like `bash`, `pwsh`, `cmd`, `nu`, `wsl` are resolved via PATH.
 Full paths with spaces must be wrapped in quotes. Both forward slashes and
 backslashes are supported.
 
+### Behaviour change: commands run through `default-shell`
+
+A command string given to `split-window`, `new-window`, `respawn-pane` or
+`respawn-window` now runs through `default-shell` when it is set, as in tmux
+(which runs it as `default-shell -c "<command>"`). Earlier versions ran it
+through the shell named by the `SHELL` environment variable, or PowerShell when
+`SHELL` was unset, whatever `default-shell` said.
+
+With `default-shell` unset nothing changes: commands run exactly as before.
+
+If you set `default-shell` to bash or cmd, a binding written in PowerShell
+syntax now reaches that shell. Either keep `default-shell pwsh`, or start
+PowerShell explicitly in the binding:
+
+```tmux
+set -g default-shell "C:/Program Files/Git/bin/bash.exe"
+
+# Runs in bash now:
+bind g split-window "git log --oneline | head -20; read"
+
+# A PowerShell one liner names pwsh itself:
+bind p split-window "pwsh -NoProfile -Command Get-Process | Sort-Object CPU -Descending | Select-Object -First 15; Read-Host"
+```
+
+A command that is just a program and its arguments (`split-window "python"`,
+`split-window -- cmd /k`) starts that program directly, with no shell in
+between, as before.
+
 ## Changing the Shell at Runtime
 
 You don't need to restart psmux to switch shells. Press `Prefix + :` (default

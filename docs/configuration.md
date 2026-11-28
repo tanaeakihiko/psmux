@@ -119,6 +119,12 @@ set -g default-shell nu
 set -g default-shell wsl
 ```
 
+**Behaviour change:** a command string given to `split-window`, `new-window` or
+`respawn-pane` now runs through `default-shell` when it is set, as in tmux. A binding written
+in PowerShell syntax needs `default-shell pwsh` or an explicit `pwsh -Command`. With
+`default-shell` unset nothing changes. See
+[multi-shell.md](multi-shell.md#behaviour-change-commands-run-through-default-shell).
+
 You can also launch a window with a specific command without changing the default:
 
 ```powershell
