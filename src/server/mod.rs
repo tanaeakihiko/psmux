@@ -877,6 +877,29 @@ fn warm_spawner() -> Option<(u32, u64)> {
 /// How often an unclaimed standby asks whether it has been orphaned.
 const WARM_ORPHAN_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 
+/// How long an unclaimed standby outlives the last server of its namespace.
+///
+/// Closing the last session and opening psmux again a little later is the
+/// most common way to start it, and the standby is what makes that start warm
+/// (about 100 ms against about 500 ms cold). So an emptied namespace keeps its
+/// standby this long, then the standby ends: it never holds its shells forever.
+/// `PSMUX_WARM_EMPTY_GRACE_MS` overrides it (tests use a few seconds).
+const WARM_EMPTY_GRACE_DEFAULT: Duration = Duration::from_secs(15 * 60);
+
+fn warm_empty_grace() -> Duration {
+    static GRACE: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *GRACE.get_or_init(|| {
+        std::env::var("PSMUX_WARM_EMPTY_GRACE_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(Duration::from_millis)
+            .unwrap_or(WARM_EMPTY_GRACE_DEFAULT)
+    })
+}
+
+/// When this standby first saw its namespace empty, while it still is.
+static WARM_EMPTY_SINCE: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
 /// Whether this unclaimed standby must end, and why. See
 /// `session::warm_standby_verdict` for the rule and why it closes the
 /// kill-server race; this only gathers the facts.
@@ -915,7 +938,20 @@ fn check_warm_standby_orphaned(app: &AppState) -> crate::session::WarmStandbyVer
             },
         ));
     }
-    crate::session::warm_standby_verdict_with_peers(&facts)
+    let verdict = crate::session::warm_standby_verdict_with_peers(&facts);
+    let mut since = WARM_EMPTY_SINCE.lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    if verdict != crate::session::WarmStandbyVerdict::NamespaceEmpty {
+        // A peer came back (or a kill verdict, which needs no grace).
+        *since = None;
+        return verdict;
+    }
+    let first = *since.get_or_insert(now);
+    if crate::session::warm_empty_grace_over(first, now, warm_empty_grace()) {
+        verdict
+    } else {
+        crate::session::WarmStandbyVerdict::Keep
+    }
 }
 
 /// Spawn a standby "warm server" process that pre-loads config + shell.

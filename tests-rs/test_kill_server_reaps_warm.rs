@@ -267,3 +267,14 @@ fn live_peer_reads_the_namespace_registry() {
     assert!(!namespace_has_live_peer(&dir, None, 400, alive2));
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_empty_namespace_waits_out_the_grace() {
+    let t0 = std::time::Instant::now();
+    let g = std::time::Duration::from_secs(900);
+    assert!(!warm_empty_grace_over(t0, t0, g));
+    assert!(!warm_empty_grace_over(t0, t0 + std::time::Duration::from_secs(899), g));
+    assert!(warm_empty_grace_over(t0, t0 + g, g));
+    // A clock that reads earlier than `since` never ends a standby early.
+    assert!(!warm_empty_grace_over(t0 + g, t0, g));
+}

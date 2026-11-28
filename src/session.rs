@@ -1536,7 +1536,8 @@ pub enum WarmStandbyVerdict {
     /// its last session was killed, exited, or its server crashed. tmux ends
     /// the server with the last session (exit-empty), so the standby, which
     /// only exists to make the next session of a running namespace instant,
-    /// ends too instead of holding its shells forever.
+    /// ends too instead of holding its shells forever. The server applies a
+    /// grace first (a relaunch soon after is the common case and stays warm).
     NamespaceEmpty,
 }
 
@@ -1590,6 +1591,12 @@ pub fn warm_standby_verdict_with_peers(f: &WarmStandbyFacts) -> WarmStandbyVerdi
         return WarmStandbyVerdict::NamespaceEmpty;
     }
     WarmStandbyVerdict::Keep
+}
+
+/// Whether a standby that first saw its namespace empty at `since` has waited
+/// out `grace` by `now` (see `WARM_EMPTY_GRACE_DEFAULT` in the server).
+pub fn warm_empty_grace_over(since: std::time::Instant, now: std::time::Instant, grace: Duration) -> bool {
+    now.saturating_duration_since(since) >= grace
 }
 
 /// Whether a server other than `self_pid` registered in namespace `ns` is
