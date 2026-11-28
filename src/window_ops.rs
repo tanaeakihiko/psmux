@@ -4973,7 +4973,7 @@ pub fn respawn_active_pane(app: &mut AppState, pty_system_ref: Option<&dyn porta
     // respawning a pane with the teammate launch command). Without a command,
     // fall back to the configured default shell (original behavior).
     let mut shell_cmd = if command.is_some() {
-        crate::pane::build_command(command, app.env_shim, app.allow_predictions)
+        crate::pane::build_command_in(command, crate::pane::command_shell_for(&expanded_shell).as_deref(), app.env_shim, app.allow_predictions)
     } else if !expanded_shell.is_empty() {
         build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions)
     } else {

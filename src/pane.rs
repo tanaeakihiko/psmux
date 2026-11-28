@@ -1312,7 +1312,7 @@ pub fn create_window_with_env(pty_system: &dyn portable_pty::PtySystem, app: &mu
     // Expand format variables like #{pane_current_path} at spawn time (#111).
     let expanded_shell = crate::format::expand_format(&app.default_shell, app);
     let mut shell_cmd = if command.is_some() {
-        build_command(command, app.env_shim, app.allow_predictions)
+        build_command_in(command, command_shell_for(&expanded_shell).as_deref(), app.env_shim, app.allow_predictions)
     } else if !expanded_shell.is_empty() {
         build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions)
     } else {
@@ -1957,7 +1957,7 @@ pub fn spawn_warm_pane_from(pty_system: &dyn portable_pty::PtySystem, p: &WarmSp
     let t_openpty = t0.elapsed();
     let mut shell_cmd = match &p.boot {
         BootCommand::Raw(args) => build_raw_command(args),
-        BootCommand::Command(c) => build_command(Some(c.as_str()), p.env_shim, p.allow_predictions),
+        BootCommand::Command(c) => build_command_in(Some(c.as_str()), command_shell_for(&p.expanded_shell).as_deref(), p.env_shim, p.allow_predictions),
         BootCommand::DefaultShell => if !p.expanded_shell.is_empty() {
             build_default_shell(&p.expanded_shell, p.env_shim, p.allow_predictions)
         } else {
@@ -2415,7 +2415,7 @@ pub fn split_active_placed(app: &mut AppState, kind: LayoutKind, command: Option
     // Expand format variables like #{pane_current_path} at spawn time (#111).
     let expanded_shell = crate::format::expand_format(&app.default_shell, app);
     let mut shell_cmd = if command.is_some() {
-        build_command(command, app.env_shim, app.allow_predictions)
+        build_command_in(command, command_shell_for(&expanded_shell).as_deref(), app.env_shim, app.allow_predictions)
     } else if !expanded_shell.is_empty() {
         build_default_shell(&expanded_shell, app.env_shim, app.allow_predictions)
     } else {
@@ -3601,7 +3601,7 @@ fn render_launch_for_shell(shell_path: &str, argv: &[String]) -> String {
 /// written in that shell's syntax, with the `env` and `cd` parts applied on
 /// the builder rather than left in the text for the shell to choke on.
 #[cfg(windows)]
-fn build_launch_command(line: &LaunchLine, env_shim: bool, allow_predictions: bool) -> CommandBuilder {
+fn build_launch_command(line: &LaunchLine, shell: Option<&str>, env_shim: bool, allow_predictions: bool) -> CommandBuilder {
     let apply = |builder: &mut CommandBuilder| {
         if let Some(dir) = line.cwd.as_deref() {
             if std::path::Path::new(dir).is_dir() {
@@ -3615,11 +3615,11 @@ fn build_launch_command(line: &LaunchLine, env_shim: bool, allow_predictions: bo
         && launch_argv_is_plain(&line.argv)
         && launch_program_spawnable(&line.argv[0])
     {
-        let mut builder = build_argv_command(&line.argv, env_shim, allow_predictions);
+        let mut builder = build_argv_command_in(&line.argv, shell, env_shim, allow_predictions);
         apply(&mut builder);
         return builder;
     }
-    let shell = cached_shell().map(|s| s.to_string()).unwrap_or_else(|| "pwsh.exe".to_string());
+    let shell = shell.map(|s| s.to_string()).unwrap_or_else(|| "pwsh.exe".to_string());
     let text = render_launch_for_shell(&shell, &line.argv);
     let mut builder = CommandBuilder::new(&shell);
     if let Ok(dir) = std::env::current_dir() { builder.cwd(dir); }
@@ -3866,6 +3866,33 @@ fn blocker_powershell() -> String {
 }
 
 pub fn build_command(command: Option<&str>, env_shim: bool, allow_predictions: bool) -> CommandBuilder {
+    build_command_in(command, None, env_shim, allow_predictions)
+}
+
+/// The program a configured `default-shell` names, resolved the way an
+/// interactive default-shell pane resolves it ([`build_default_shell`]), for
+/// running a pane COMMAND through it. tmux runs every command string through
+/// `default-shell -c` (spawn.c); psmux used the SHELL variable for commands
+/// even when default-shell named another shell, so `set -g default-shell cmd`
+/// gave cmd panes but pwsh commands.
+///
+/// `None` when default-shell is unset (empty) or names nothing that exists:
+/// then the command keeps the shell it always had ([`cached_shell`]).
+pub fn command_shell_for(default_shell: &str) -> Option<String> {
+    let value = default_shell.trim();
+    if value.is_empty() { return None; }
+    let (program, _args) = resolve_shell_program(value);
+    let program = remap_git_bash_launcher(program);
+    let resolved = cached_which(&program);
+    if std::path::Path::new(&resolved).is_file() { Some(resolved) } else { None }
+}
+
+/// [`build_command`] with the shell that runs a command string named:
+/// `Some` for a configured default-shell (see [`command_shell_for`]), `None`
+/// for the pane shell psmux has always picked (SHELL, then the
+/// pwsh > powershell > cmd walk).
+pub fn build_command_in(command: Option<&str>, shell: Option<&str>, env_shim: bool, allow_predictions: bool) -> CommandBuilder {
+    let shell: Option<&str> = shell.or_else(|| cached_shell());
     // Capture CWD early — portable_pty on Windows defaults to USERPROFILE
     // (home dir) when no cwd is set on CommandBuilder, so we must set it
     // explicitly to honour the caller's working directory.
@@ -3887,7 +3914,6 @@ pub fn build_command(command: Option<&str>, env_shim: bool, allow_predictions: b
     #[cfg(windows)]
     let command: Option<&str> = match command {
         Some(c) if matches!(c.trim(), "cat" | "cat -") => {
-            let shell = cached_shell();
             match cat_blocker_for_shell(shell) {
                 // Unchanged default route: the pane's PowerShell runs it.
                 CatBlocker::PaneShell(script) => Some(script),
@@ -3911,7 +3937,7 @@ pub fn build_command(command: Option<&str>, env_shim: bool, allow_predictions: b
     // K=V...] prog args`, in the string or the `--` argv form.
     #[cfg(windows)]
     if let Some(line) = command.and_then(parse_launch_line) {
-        return build_launch_command(&line, env_shim, allow_predictions);
+        return build_launch_command(&line, shell, env_shim, allow_predictions);
     }
     // tmux parity (#582): an explicit `-- prog args...` argv with more than
     // one token is exec'd DIRECTLY (tmux spawn.c execvp), never routed
@@ -3971,12 +3997,12 @@ pub fn build_command(command: Option<&str>, env_shim: bool, allow_predictions: b
     #[cfg(windows)]
     if let Some(c) = command {
         if matches!(c.trim(), "cat" | "cat -") {
-            return build_command(Some(c.trim()), env_shim, allow_predictions);
+            return build_command_in(Some(c.trim()), shell, env_shim, allow_predictions);
         }
     }
     #[cfg(windows)]
     if let Some(tokens) = raw_argv {
-        return build_argv_command(&tokens, env_shim, allow_predictions);
+        return build_argv_command_in(&tokens, shell, env_shim, allow_predictions);
     }
     if let Some(cmd) = command {
         // On Windows, detect `/bin/bash -c '...'` wrappers used by tools like
@@ -4058,7 +4084,7 @@ pub fn build_command(command: Option<&str>, env_shim: bool, allow_predictions: b
             }
         }
 
-        let shell = cached_shell().map(|s| s.to_string());
+        let shell = shell.map(|s| s.to_string());
 
         match shell {
             Some(path) => {
@@ -4098,7 +4124,7 @@ pub fn build_command(command: Option<&str>, env_shim: bool, allow_predictions: b
             }
         }
     } else {
-        let shell = cached_shell().map(|s| s.to_string());
+        let shell = shell.map(|s| s.to_string());
         // PSReadLine v2.2.6+ enables PredictionSource HistoryAndPlugin by default.
         // Predictions cause display corruption in terminal multiplexers because
         // PSReadLine's VT rendering races with ConPTY output capture.
@@ -4359,6 +4385,14 @@ pub const BATCH_LINE_ENV: &str = "PSMUX_BATCH_LINE";
 /// Such a script gets a command line written for cmd (see
 /// [`batch_command_line`]) and cmd.exe is started to run it.
 pub fn build_argv_command(tokens: &[String], env_shim: bool, allow_predictions: bool) -> CommandBuilder {
+    build_argv_command_in(tokens, None, env_shim, allow_predictions)
+}
+
+/// [`build_argv_command`] with the shell a `cat` placeholder is written for
+/// (see [`build_command_in`]); a plain argv never runs through a shell.
+pub fn build_argv_command_in(tokens: &[String], shell: Option<&str>, env_shim: bool, allow_predictions: bool) -> CommandBuilder {
+    #[cfg(not(windows))]
+    let _ = shell;
     // tmux blocker idiom (issue #580): `-- cat` / `-- cat -` is how Claude
     // Code's teammate backend creates its placeholder panes. A literal `cat`
     // fails CreateProcessW, so it gets the stdin-draining blocker that the
@@ -4371,7 +4405,7 @@ pub fn build_argv_command(tokens: &[String], env_shim: bool, allow_predictions: 
             _ => false,
         };
         if blocker {
-            return build_command(Some("cat"), env_shim, allow_predictions);
+            return build_command_in(Some("cat"), shell, env_shim, allow_predictions);
         }
     }
     let cwd = std::env::current_dir().ok();
@@ -5923,3 +5957,6 @@ mod test_issue924_store_shell_session0;
 #[cfg(test)]
 #[path = "../tests-rs/test_issue1115_cat_blocker_shell.rs"]
 mod test_issue1115_cat_blocker_shell;
+#[cfg(test)]
+#[path = "../tests-rs/test_default_shell_runs_commands.rs"]
+mod test_default_shell_runs_commands;
